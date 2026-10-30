@@ -1,0 +1,27 @@
+{
+  "name": "usage-meter",
+  "version": "0.6.0",
+  "description": "Floating macOS panel for Codex account limits and local CPU, RAM, GPU and network utilization.",
+  "author": {
+    "name": "MORfin83"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Usage Meter Pure",
+    "shortDescription": "Codex limits and Mac performance at a glance.",
+    "longDescription": "Companion macOS panel in the bottom-right corner, with Show/Hide and All Parameters switches. Displays remaining Codex allowance and local CPU, RAM, GPU and network percentages. Refreshes without model turns. Exact remaining tokens are unavailable. Includes local source and build script; not a native host UI extension.",
+    "developerName": "MORfin83",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Otevři panel Usage Meter.",
+      "Kolik mi zbývá limitu v Codexu?"
+    ]
+  },
+  "keywords": [
+    "usage",
+    "limits",
+    "codex",
+    "productivity"
+  ]
+}

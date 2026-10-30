@@ -1,0 +1,59 @@
+# macOS and Finder
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon\r
+._*
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local configuration, credentials and signing material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+credentials.json
+*credentials*.json
+*token*.json
+*.session
+
+# Build products and local release staging
+/dist/
+/web/dist/
+/release/
+/release.noindex/
+/release.noindex
+/release-archive/
+*.dmg
+*.app/
+*.xcarchive/
+*.dSYM/
+*.zip
+
+# Local mounts and temporary files
+/Volumes/
+.mount/
+.tmp/
+tmp/
+
+# Private recovery material and local cloud-tooling state (never commit)
+/recovery/
+/.cloudflare/
