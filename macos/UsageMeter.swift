@@ -320,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let claudeWeek = MeterRow(L("Claude · zbývá týden"), remaining: true, tint: Palette.claude)
     let claudeTokens = NSTextField(labelWithString: "")
     let claudeUpdated = NSTextField(labelWithString: L("Claude: načítání…"))
+    let claudeSetupLabel = NSTextField(labelWithString: "")
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -330,6 +331,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        if let binary = Bundle.main.executablePath {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let state = ClaudeSetup.install(binary: binary)
+                DispatchQueue.main.async { self?.claudeSetupLabel.stringValue = state.label }
+            }
+        }
         UserDefaults.standard.register(defaults: ["showPanelDetails": true, "showAI": true,
             "showMac": true, "showCPUCores": true, "showGPUCores": true, "showEverywhere": true])
         pinnedEverywhere = UserDefaults.standard.bool(forKey: "showEverywhere")
@@ -444,7 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             title.font = .systemFont(ofSize: 10, weight: .semibold)
             title.textColor = .secondaryLabelColor
         }
-        for note in [claudeTokens, claudeUpdated] {
+        for note in [claudeTokens, claudeUpdated, claudeSetupLabel] {
             note.font = .systemFont(ofSize: 9)
             note.textColor = .tertiaryLabelColor
         }
@@ -462,7 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aiSwitch.setAccessibilityLabel(L("Zobrazit AI"))
         let aiHeader = NSStackView(views: [NSTextField(labelWithString: "AI"), NSView(), aiSwitch])
         aiHeader.orientation = .horizontal
-        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeTokens, claudeUpdated], spacing: 12)
+        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
            let source = CIImage(contentsOf: url) {
@@ -704,9 +711,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let now = Date().timeIntervalSince1970
         let age = snap.planObservedAt.map { now - $0 }
         let stale = age.map { $0 > ClaudeUsage.staleAfter } ?? true
-        let reset = L("Čas resetu není v lokálním zdroji Claude.")
-        claudeFive.update(snap.fiveHourUsed.map { 100 - $0 }, tooltip: reset)
-        claudeWeek.update(snap.weekUsed.map { 100 - $0 }, tooltip: reset)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d. M. HH:mm"
+        func resetText(_ epoch: Double?) -> String {
+            guard let epoch = epoch else { return L("Čas resetu není v lokálním zdroji Claude.") }
+            return LF("Obnova: %@", formatter.string(from: Date(timeIntervalSince1970: epoch)))
+        }
+        claudeFive.update(snap.fiveHourUsed.map { 100 - $0 }, tooltip: resetText(snap.fiveHourResetsAt))
+        claudeWeek.update(snap.weekUsed.map { 100 - $0 }, tooltip: resetText(snap.weekResetsAt))
         claudeFive.alphaValue = stale ? 0.5 : 1
         claudeWeek.alphaValue = stale ? 0.5 : 1
         if let five = snap.tokens5h, let week = snap.tokens7d {
@@ -723,9 +735,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             claudeUpdated.stringValue = LF("Claude: starší údaj (%@ min)", String(Int(age / 60)))
             claudeUpdated.textColor = .systemOrange
         } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
-            claudeUpdated.stringValue = LF("Claude: údaj z %@", formatter.string(from: Date(timeIntervalSince1970: snap.planObservedAt ?? now)))
+            let clock = DateFormatter()
+            clock.dateFormat = "HH:mm"
+            let source = snap.fromStatusline ? L("Claude Code (statusline)") : L("aplikace Claude")
+            claudeUpdated.stringValue = LF("Claude: údaj z %@, %@", clock.string(from: Date(timeIntervalSince1970: snap.planObservedAt ?? now)), source)
             claudeUpdated.textColor = .tertiaryLabelColor
         }
     }
@@ -888,6 +901,9 @@ struct ClaudeSnapshot {
     var planObservedAt: Double?
     var fiveHourUsed: Double?
     var weekUsed: Double?
+    var fiveHourResetsAt: Double?
+    var weekResetsAt: Double?
+    var fromStatusline = false
     var tokens5h: Int?
     var tokens7d: Int?
 }
@@ -909,7 +925,14 @@ enum ClaudeUsage {
 
     static func read(now: Date = Date(), planFile: URL = ClaudeUsage.planFile, projects: URL = ClaudeUsage.projects) -> ClaudeSnapshot {
         var snap = ClaudeSnapshot()
-        if let plan = planSnapshot(url: planFile) {
+        if let live = ClaudeStatusline.freshLimits(now: now.timeIntervalSince1970) {
+            snap.planObservedAt = live.observedAt
+            snap.fiveHourUsed = live.fiveHourUsed
+            snap.weekUsed = live.weekUsed
+            snap.fiveHourResetsAt = live.fiveHourResetsAt
+            snap.weekResetsAt = live.weekResetsAt
+            snap.fromStatusline = true
+        } else if let plan = planSnapshot(url: planFile) {
             snap.planObservedAt = plan.time
             snap.fiveHourUsed = plan.fiveHour
             snap.weekUsed = plan.week
@@ -1104,6 +1127,8 @@ if CommandLine.arguments.count >= 5 && CommandLine.arguments[1] == "--claude-che
     if let v = snap.planObservedAt { out["planObservedAt"] = v }
     if let v = snap.fiveHourUsed { out["fiveHourUsed"] = v }
     if let v = snap.weekUsed { out["weekUsed"] = v }
+    if let v = snap.fiveHourResetsAt { out["fiveHourResetsAt"] = v }
+    if let v = snap.weekResetsAt { out["weekResetsAt"] = v }
     if let v = snap.tokens5h { out["tokens5h"] = v }
     if let v = snap.tokens7d { out["tokens7d"] = v }
     print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
@@ -1120,6 +1145,252 @@ if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--usage-chec
         print("{\"status\":\"unavailable\"}")
         exit(1)
     }
+}
+
+// MARK: - Claude Code status line (official hook; no cookies, no tokens, no network)
+//
+// Claude Code runs `statusLine.command` after each assistant message and passes session JSON on stdin.
+// The JSON contains `rate_limits.five_hour` and `rate_limits.seven_day` with `used_percentage` and `resets_at`.
+// This mode stores only those four numbers per window and never copies cwd, transcript paths or ids.
+
+enum AppSupport {
+    /// `USAGE_METER_TEST_SUPPORT` redirects storage in tests only.
+    static var directory: URL {
+        if let override = ProcessInfo.processInfo.environment["USAGE_METER_TEST_SUPPORT"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("Usage Meter Pure", isDirectory: true)
+    }
+
+    /// Writes atomically, follows symlinks (dotfile setups), keeps the existing permissions, and uses 0600 for new files.
+    static func writeAtomically(_ data: Data, to url: URL) throws {
+        let target = url.resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let existing = (try? FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions]) as? NSNumber
+        try data.write(to: target, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: existing?.intValue ?? 0o600], ofItemAtPath: target.path)
+    }
+}
+
+enum ClaudeStatusline {
+    static var file: URL { AppSupport.directory.appendingPathComponent("claude-statusline.json") }
+    static var configFile: URL { AppSupport.directory.appendingPathComponent("claude-setup.json") }
+    static let maxAge: TimeInterval = 3600
+
+    struct Limits {
+        let observedAt: Double
+        let fiveHourUsed: Double?
+        let weekUsed: Double?
+        let fiveHourResetsAt: Double?
+        let weekResetsAt: Double?
+    }
+
+    /// Entry point for `UsageMeter --statusline`. Always exits 0 so Claude Code never shows an error.
+    static func run(stdin: Data) -> Int32 {
+        if let json = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any],
+           let limits = json["rate_limits"] as? [String: Any] {
+            save(limits, now: Date().timeIntervalSince1970)
+        }
+        guard let previous = loadConfig()?["previousCommand"] as? String, !previous.isEmpty else { return 0 }
+        return runChained(previous, stdin: stdin)
+    }
+
+    static func save(_ limits: [String: Any], now: Double) {
+        func window(_ key: String) -> [String: Any] {
+            guard let node = limits[key] as? [String: Any] else { return [:] }
+            var out: [String: Any] = [:]
+            if let used = CodexUsage.finiteNumber(node["used_percentage"]), used >= 0, used <= 100 {
+                out["usedPercent"] = used
+            }
+            if var reset = CodexUsage.finiteNumber(node["resets_at"]), reset > 0 {
+                if reset > 1e11 { reset /= 1000 }
+                out["resetsAt"] = reset
+            }
+            return out
+        }
+        // A payload may carry only one window; keep the previously stored value for the other.
+        var record: [String: Any] = ["observedAt": now]
+        let previous = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        for (name, key) in [("fiveHour", "five_hour"), ("sevenDay", "seven_day")] {
+            let fresh = window(key)
+            record[name] = fresh.isEmpty ? (previous[name] as? [String: Any] ?? [:]) : fresh
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+        try? AppSupport.writeAtomically(data, to: file)
+    }
+
+    /// Returns the stored limits only when they are recent and their reset time is still in the future.
+    static func freshLimits(now: Double) -> Limits? {
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let observed = CodexUsage.finiteNumber(root["observedAt"]),
+              now - observed <= maxAge else { return nil }
+        func values(_ key: String) -> (used: Double?, reset: Double?) {
+            let node = root[key] as? [String: Any] ?? [:]
+            let reset = CodexUsage.finiteNumber(node["resetsAt"])
+            let used = CodexUsage.finiteNumber(node["usedPercent"])
+            // After a window has reset, the old percentage no longer applies.
+            if let reset = reset, reset <= now { return (nil, nil) }
+            return (used, reset)
+        }
+        let five = values("fiveHour")
+        let week = values("sevenDay")
+        // A recent record is authoritative even when both windows have reset: the values are then unknown, not old.
+        return Limits(observedAt: observed, fiveHourUsed: five.used, weekUsed: week.used,
+                      fiveHourResetsAt: five.reset, weekResetsAt: week.reset)
+    }
+
+    static func loadConfig() -> [String: Any]? {
+        guard let data = try? Data(contentsOf: configFile) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    static func runChained(_ command: String, stdin: Data) -> Int32 {
+        signal(SIGPIPE, SIG_IGN)  // a child that stops reading must not kill the status line
+        final class Box { var output = Data() }
+        let box = Box()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return 0 }
+        let finished = DispatchSemaphore(value: 0)
+        // Reading and writing happen off the main thread so the 5 s deadline below always applies.
+        DispatchQueue.global().async {
+            box.output = output.fileHandleForReading.readDataToEndOfFile()
+            finished.signal()
+        }
+        DispatchQueue.global().async {
+            try? input.fileHandleForWriting.write(contentsOf: stdin)
+            try? input.fileHandleForWriting.close()
+        }
+        if finished.wait(timeout: .now() + 5) == .timedOut {
+            process.terminate()
+            _ = finished.wait(timeout: .now() + 1)
+        }
+        FileHandle.standardOutput.write(box.output)
+        return 0
+    }
+}
+
+enum ClaudeSetupState {
+    case installed, alreadyInstalled, claudeNotFound, unreadable, removed
+
+    var label: String {
+        switch self {
+        case .installed: return L("Claude Code: statusline připojen automaticky.")
+        case .alreadyInstalled: return L("Claude Code: statusline je připojen.")
+        case .claudeNotFound: return L("Claude Code není nainstalován. Statusline se připojí po instalaci.")
+        case .unreadable: return L("Claude Code: nastavení nejde bezpečně upravit, zůstává beze změny.")
+        case .removed: return L("Claude Code: statusline odpojen.")
+        }
+    }
+}
+
+/// Connects Claude Code to this app by writing the `statusLine` key in `~/.claude/settings.json`.
+/// Keeps every other key, backs up the file once, and chains any status line the user already had.
+enum ClaudeSetup {
+    static var claudeDirectory: URL {
+        if let override = ProcessInfo.processInfo.environment["USAGE_METER_TEST_CLAUDE"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true)
+    }
+    static var settingsFile: URL { claudeDirectory.appendingPathComponent("settings.json") }
+    static var backupFile: URL { claudeDirectory.appendingPathComponent("settings.json.usage-meter-backup.json") }
+
+    /// Single quotes stop the shell from expanding `$`, backticks or `$(...)` in the app path.
+    static func command(for binary: String) -> String {
+        "'" + binary.replacingOccurrences(of: "'", with: "'\\''") + "' --statusline"
+    }
+
+    /// Only our own app binary inside a bundle counts, so a user's `echo UsageMeter --statusline` is not replaced.
+    static func isOurs(_ command: String?) -> Bool {
+        guard let command = command else { return false }
+        return command.hasSuffix(" --statusline") && command.contains(".app/Contents/MacOS/UsageMeter")
+    }
+
+    static func install(binary: String) -> ClaudeSetupState {
+        guard binary.hasPrefix("/"), binary.hasSuffix("/UsageMeter") else { return .unreadable }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: claudeDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return .claudeNotFound
+        }
+        var settings: [String: Any] = [:]
+        let hadSettings = FileManager.default.fileExists(atPath: settingsFile.path)
+        if hadSettings {
+            guard let data = try? Data(contentsOf: settingsFile),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unreadable }
+            settings = object
+        }
+        let ours = command(for: binary)
+        var config = ClaudeStatusline.loadConfig() ?? [:]
+        let current = settings["statusLine"] as? [String: Any]
+        let currentCommand = current?["command"] as? String
+        if currentCommand == ours && config["installedCommand"] as? String == ours {
+            return .alreadyInstalled
+        }
+        if !isOurs(currentCommand) {
+            // Remember the user's own status line so it keeps running, and so uninstall can restore it.
+            config["previousStatusLine"] = current as Any?
+            config["previousCommand"] = currentCommand as Any?
+        }
+        if hadSettings && !FileManager.default.fileExists(atPath: backupFile.path) {
+            // Without a backup we do not touch the user's settings at all.
+            do { try FileManager.default.copyItem(at: settingsFile, to: backupFile) } catch { return .unreadable }
+        }
+        // Keep every other field of the user's status line (padding, refreshInterval, ...); change only type and command.
+        var line = current ?? [:]
+        line["type"] = "command"
+        line["command"] = ours
+        settings["statusLine"] = line
+        config["installedCommand"] = ours
+        // Config first: if it cannot be saved, the previous status line is not lost by changing settings.
+        guard let configData = try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]),
+              (try? AppSupport.writeAtomically(configData, to: ClaudeStatusline.configFile)) != nil else { return .unreadable }
+        guard write(settings) else { return .unreadable }
+        return currentCommand == ours ? .alreadyInstalled : .installed
+    }
+
+    /// Restores the user's previous status line, or removes the key if there was none.
+    static func uninstall() -> ClaudeSetupState {
+        let config = ClaudeStatusline.loadConfig() ?? [:]
+        if let data = try? Data(contentsOf: settingsFile) {
+            guard var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unreadable }
+            if isOurs((settings["statusLine"] as? [String: Any])?["command"] as? String) {
+                if let previous = config["previousStatusLine"] as? [String: Any] {
+                    settings["statusLine"] = previous
+                } else {
+                    settings.removeValue(forKey: "statusLine")
+                }
+                // Keep the saved state until the restore has been written.
+                guard write(settings) else { return .unreadable }
+            }
+        }
+        try? FileManager.default.removeItem(at: ClaudeStatusline.configFile)
+        try? FileManager.default.removeItem(at: ClaudeStatusline.file)
+        return .removed
+    }
+
+    static func write(_ settings: [String: Any]) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) else { return false }
+        return (try? AppSupport.writeAtomically(data, to: settingsFile)) != nil
+    }
+}
+
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--statusline" {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    exit(ClaudeStatusline.run(stdin: input))
+}
+if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--claude-setup" {
+    let state: ClaudeSetupState = CommandLine.arguments[2] == "uninstall" ? ClaudeSetup.uninstall()
+        : ClaudeSetup.install(binary: CommandLine.arguments.count >= 4 ? CommandLine.arguments[3] : "")
+    print(state.label)
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--sample") {

@@ -56,8 +56,9 @@ class ClaudeSourceTests(unittest.TestCase):
         self.plan.write_text(json.dumps(body))
 
     def check(self, now=NOW):
+        env = dict(os.environ, USAGE_METER_TEST_SUPPORT=str(self.dir / "support"))
         result = subprocess.run([_build["binary"], "--claude-check", str(self.plan), str(self.projects), str(now)],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, timeout=60, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 

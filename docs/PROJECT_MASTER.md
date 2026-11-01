@@ -1,23 +1,22 @@
 # Usage Meter Pure — project master
 
-Status as of 2026-11-01. Authoritative source: the code in this repository plus the decisions in [DECISIONS.md](DECISIONS.md). Older documents are history only.
+Stav k 2026-11-01. Autoritativní zdroj: kód v tomto repozitáři a rozhodnutí v [DECISIONS.md](DECISIONS.md). Starší dokumenty jsou jen historie.
 
-## What it is
-Native macOS panel (Apple Silicon, macOS 13+) showing shared Codex account limits and local CPU, per-core CPU, memory, GPU and network load. MIT licence. Studio Pure Sound / MORfin83.
+## Co to je
+Nativní panel pro macOS (Apple Silicon, macOS 13+). Ukazuje limity Codexu a Claude a lokální CPU, jádra, paměť, GPU a síť. Licence MIT. Studio Pure Sound / MORfin83.
 
-## Versions
-- Last published: 0.6.0 build 8 (see [RELEASES.md](../RELEASES.md)).
-- Release candidate: 0.6.1 RC2 build 9 (public DMG, older source); RC3 build 10 built locally with the native reader, not published.
-- `main` contains the native reader (PR #1 merged). Working branch: `chore/rc3-release-tooling`.
+## Stav
+- Verze 0.6.1 build 11 je sestavená a otestovaná lokálně. Vydání čeká na schválení vlastníka.
+- Naposledy vydáno: 0.6.0 build 8. Pre-release: 0.6.1 RC3 build 10 (viz [RELEASES.md](../RELEASES.md)).
+- Pracovní větev: `release/0.6.1`.
 
-## Verified (2026-11-01)
-- Public `main` (`ea5e285`) equals the sources in the private repository.
-- RC2 DMG SHA-256 recomputed: `4cdb79fe…aa36`, matches the record.
-- Limits read live through `account/rateLimits/read` with codex-cli 0.165.0; no tokens spent.
-- Unit tests and the Swift adapter tests pass; the app builds and is ad-hoc signed.
+## Ověřeno
+- 38 Python testů prošlo (viz [TEST_REPORT.md](TEST_REPORT.md)).
+- Aplikace se sestaví a je ad-hoc podepsaná.
+- Limity Codexu se čtou živě přes `account/rateLimits/read`; tokeny se neutrácí.
 
-## Open
-See [BACKLOG.md](BACKLOG.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md). Main points: clean-Mac and GUI verification not yet done; RC2 DMG on disk was built from an earlier source state; an unexplained second DMG exists locally.
+## Otevřené
+Viz [BACKLOG.md](BACKLOG.md) a [KNOWN_ISSUES.md](KNOWN_ISSUES.md). Hlavní body: test na čistém Macu a živá session Claude Code se status line jsou NEOVĚŘENO.
 
-## Backups
-Before a milestone (release candidate, tag, public release), keep a copy of the docs and the release artefacts in a folder outside the repository, and record the checksums.
+## Zálohy
+Před milníkem (kandidát, tag, veřejné vydání) uložte kopii dokumentace a artefaktů mimo repozitář a zapište kontrolní součty.
