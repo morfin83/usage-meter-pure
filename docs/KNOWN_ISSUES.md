@@ -10,7 +10,6 @@
 ## Open
 - **RC2 DMG on disk predates the adapter change.** Its `usage_meter.py` matches the old public source. A new RC needs a new build and checksum.
 - **Unlabelled DMG** `Usage-Meter-Pure-0.6.1-RC-build9.dmg` (SHA-256 `62f14860…`) exists locally and matches no record. Not used.
-- **`observedAt` is the parse time.** The footer says "checked" at a time the server answer might be older. Low risk, but misleading.
 - **Clean-install behaviour untested.** Gatekeeper, first open, drag to Applications: NEOVĚŘENO.
 - **Codex is a moving target.** The app depends on `codex app-server` protocol details (`--disable hooks`, the `account/rateLimits/read` shape). Tested with codex-cli 0.165.0 only. A new Codex version must be re-checked against the JSON schema from `codex app-server generate-json-schema`.
 - **Pending child cleanup on crash.** If the app is killed hard, the app-server child may outlive it until its stdin closes. Expected to exit on EOF; not verified.

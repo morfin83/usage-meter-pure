@@ -7,8 +7,8 @@ Native macOS panel (Apple Silicon, macOS 13+) showing shared Codex account limit
 
 ## Versions
 - Last published: 0.6.0 build 8 (see [RELEASES.md](../RELEASES.md)).
-- Release candidate: 0.6.1 RC2 build 9, ad-hoc signed, not notarized, not approved as final.
-- Working branch: `fix/native-usage-adapter` (not merged, not pushed). `main` is unchanged.
+- Release candidate: 0.6.1 RC2 build 9 (public DMG, older source); RC3 build 10 built locally with the native reader, not published.
+- `main` contains the native reader (PR #1 merged). Working branch: `chore/rc3-release-tooling`.
 
 ## Verified (2026-11-01)
 - Public `main` (`ea5e285`) equals the sources in the private repository.
