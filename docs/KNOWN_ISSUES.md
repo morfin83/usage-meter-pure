@@ -14,3 +14,8 @@
 - **Codex is a moving target.** The app depends on `codex app-server` protocol details (`--disable hooks`, the `account/rateLimits/read` shape). Tested with codex-cli 0.165.0 only. A new Codex version must be re-checked against the JSON schema from `codex app-server generate-json-schema`.
 - **Pending child cleanup on crash.** If the app is killed hard, the app-server child may outlive it until its stdin closes. Expected to exit on EOF; not verified.
 - **Build script defaults.** `build_macos.sh` removes the target folder you give it; always pass an empty scratch folder.
+
+## Claude panel (branch feat/claude-usage-sources)
+- **Limits are stale unless the Claude app writes them.** The app writes its plan file only on its own schedule; the last write seen on 2026-11-01 was 31 Oct 22:32. The panel dims the rows and shows the age after 1 hour.
+- **No reset times locally.** The Claude app keeps them in memory only.
+- **Token totals include cache reads**, which dominate Claude Code volume (about 156 M in 5 h on the test Mac). They are not the same as the subscription limit.

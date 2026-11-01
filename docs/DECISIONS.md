@@ -10,3 +10,4 @@ Approved by the owner on 2026-11-01 unless noted.
 - **D6 — Release history file.** `RELEASES.md` at the root is the single history (per CLAUDE.md). `docs/RELEASE_HISTORY.md` from the proposed structure is intentionally not created, to avoid a duplicate.
 - **D7 — Website excluded.** The public repository contains no website material. Studio Pure Sound website is a distribution channel only.
 - **D8 — Scope of this work.** Fixes and documentation on a branch; no new features.
+- **D9 — Claude data (approved 2026-11-01, variant A + C).** Limits: read the Claude app's `plan-usage-history.json` (`fh` = 5 h, `sd` = 7 days, used %). Tokens: sum Claude Code session logs in `~/.claude/projects` (per message id, last record wins). Not used: the usage API with the app's session cookie (would read another app's credentials), and `anthropic-ratelimit-*` headers (need an API key and spend tokens).

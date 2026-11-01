@@ -24,3 +24,9 @@
 
 ## Build
 `scripts/build_macos.sh` compiles with `xcrun swiftc -target arm64-apple-macos13.0`, copies resources, writes `Info.plist`, cleans extended attributes and signs ad-hoc with bounded retries.
+
+## Claude sources (branch feat/claude-usage-sources)
+- `ClaudeUsage.planSnapshot` reads `~/Library/Application Support/Claude/plan-usage-history.json` (version 2, newest sample, `fh`/`sd` as used %, values outside 0–100 dropped).
+- `ClaudeUsage.tokenTotals` sums `message.usage` from `~/.claude/projects/**/*.jsonl` (files modified in the last 7 days; one entry per message id).
+- Both run on the background refresh queue together with the Codex read; `applyClaude` updates the rows on the main queue.
+- Test hook: `UsageMeter --claude-check <plan> <projects> <nowEpoch>`.

@@ -193,6 +193,7 @@ enum Palette {
     static let ram = NSColor(srgbRed: 0.96, green: 0.70, blue: 0.75, alpha: 1)
     static let gpu = NSColor(srgbRed: 0.79, green: 0.70, blue: 0.95, alpha: 1)
     static let network = NSColor(srgbRed: 0.62, green: 0.87, blue: 0.88, alpha: 1)
+    static let claude = NSColor(srgbRed: 0.87, green: 0.64, blue: 0.50, alpha: 1)
 }
 
 final class PastelBar: NSView {
@@ -313,6 +314,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let network = MeterRow(L("Síť"), tint: Palette.network)
     let updated = NSTextField(labelWithString: L("Limity: načítání…"))
     let creditLabel = NSTextField(labelWithString: L("Tokeny: API neposkytuje"))
+    let codexTitle = NSTextField(labelWithString: "Codex")
+    let claudeTitle = NSTextField(labelWithString: "Claude")
+    let claudeFive = MeterRow(L("Claude · zbývá 5 h"), remaining: true, tint: Palette.claude)
+    let claudeWeek = MeterRow(L("Claude · zbývá týden"), remaining: true, tint: Palette.claude)
+    let claudeTokens = NSTextField(labelWithString: "")
+    let claudeUpdated = NSTextField(labelWithString: L("Claude: načítání…"))
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -433,6 +440,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         details.isHidden = false
         creditLabel.font = .systemFont(ofSize: 9)
         creditLabel.textColor = .tertiaryLabelColor
+        for title in [codexTitle, claudeTitle] {
+            title.font = .systemFont(ofSize: 10, weight: .semibold)
+            title.textColor = .secondaryLabelColor
+        }
+        for note in [claudeTokens, claudeUpdated] {
+            note.font = .systemFont(ofSize: 9)
+            note.textColor = .tertiaryLabelColor
+        }
         updated.font = .systemFont(ofSize: 9)
         updated.textColor = .secondaryLabelColor
         updated.lineBreakMode = .byTruncatingTail
@@ -447,7 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aiSwitch.setAccessibilityLabel(L("Zobrazit AI"))
         let aiHeader = NSStackView(views: [NSTextField(labelWithString: "AI"), NSView(), aiSwitch])
         aiHeader.orientation = .horizontal
-        aiBody = vertical([quota, weekly, creditLabel, updated], spacing: 12)
+        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeTokens, claudeUpdated], spacing: 12)
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
            let source = CIImage(contentsOf: url) {
@@ -667,6 +682,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                }) {
                 data = CodexUsage.snapshot(payload, now: Date().timeIntervalSince1970)
             }
+            let claude = ClaudeUsage.read()
+            DispatchQueue.main.async { self?.applyClaude(claude) }
             let result = data
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -680,6 +697,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 self.applyUsage(data)
             }
+        }
+    }
+
+    func applyClaude(_ snap: ClaudeSnapshot) {
+        let now = Date().timeIntervalSince1970
+        let age = snap.planObservedAt.map { now - $0 }
+        let stale = age.map { $0 > ClaudeUsage.staleAfter } ?? true
+        let reset = L("Čas resetu není v lokálním zdroji Claude.")
+        claudeFive.update(snap.fiveHourUsed.map { 100 - $0 }, tooltip: reset)
+        claudeWeek.update(snap.weekUsed.map { 100 - $0 }, tooltip: reset)
+        claudeFive.alphaValue = stale ? 0.5 : 1
+        claudeWeek.alphaValue = stale ? 0.5 : 1
+        if let five = snap.tokens5h, let week = snap.tokens7d {
+            claudeTokens.stringValue = LF("Tokeny z Claude Code: 5 h %@ · 7 dní %@", ClaudeUsage.compact(five), ClaudeUsage.compact(week))
+        } else {
+            claudeTokens.stringValue = L("Tokeny z Claude Code: žádné místní záznamy")
+        }
+        guard let age = age else {
+            claudeUpdated.stringValue = L("Claude: údaj není dostupný")
+            claudeUpdated.textColor = .systemOrange
+            return
+        }
+        if stale {
+            claudeUpdated.stringValue = LF("Claude: starší údaj (%@ min)", String(Int(age / 60)))
+            claudeUpdated.textColor = .systemOrange
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            claudeUpdated.stringValue = LF("Claude: údaj z %@", formatter.string(from: Date(timeIntervalSince1970: snap.planObservedAt ?? now)))
+            claudeUpdated.textColor = .tertiaryLabelColor
         }
     }
 
@@ -837,6 +884,104 @@ enum CodexUsage {
     }
 }
 
+struct ClaudeSnapshot {
+    var planObservedAt: Double?
+    var fiveHourUsed: Double?
+    var weekUsed: Double?
+    var tokens5h: Int?
+    var tokens7d: Int?
+}
+
+/// Local, read-only Claude data. Limits come from the Claude app's own plan-usage file
+/// (`fh` = 5-hour window, `sd` = 7-day window, both "used" percent). Tokens come from
+/// Claude Code session logs. Neither source is the official live limit API.
+enum ClaudeUsage {
+    static let staleAfter: TimeInterval = 3600
+    static let home = FileManager.default.homeDirectoryForCurrentUser
+    static let planFile = home.appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
+    static let projects = home.appendingPathComponent(".claude/projects")
+    static let timeFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    static let plainTimeFormatter = ISO8601DateFormatter()
+
+    static func read(now: Date = Date(), planFile: URL = ClaudeUsage.planFile, projects: URL = ClaudeUsage.projects) -> ClaudeSnapshot {
+        var snap = ClaudeSnapshot()
+        if let plan = planSnapshot(url: planFile) {
+            snap.planObservedAt = plan.time
+            snap.fiveHourUsed = plan.fiveHour
+            snap.weekUsed = plan.week
+        }
+        if let totals = tokenTotals(root: projects, now: now.timeIntervalSince1970) {
+            snap.tokens5h = totals.fiveHour
+            snap.tokens7d = totals.week
+        }
+        return snap
+    }
+
+    /// Takes the newest sample. Values outside 0...100 are dropped, not clamped.
+    static func planSnapshot(url: URL) -> (time: Double, fiveHour: Double?, week: Double?)? {
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (root["version"] as? NSNumber)?.intValue == 2,
+              let samples = root["samples"] as? [[String: Any]] else { return nil }
+        var newest: (time: Double, usage: [String: Any])?
+        for sample in samples {
+            guard var time = CodexUsage.finiteNumber(sample["t"]) else { continue }
+            if time > 1e11 { time /= 1000 }
+            if newest == nil || time > newest!.time {
+                newest = (time, sample["u"] as? [String: Any] ?? [:])
+            }
+        }
+        guard let latest = newest else { return nil }
+        func percent(_ key: String) -> Double? {
+            guard let value = CodexUsage.finiteNumber(latest.usage[key]), value >= 0, value <= 100 else { return nil }
+            return value
+        }
+        return (latest.time, percent("fh"), percent("sd"))
+    }
+
+    /// Sums tokens per message id (streamed records repeat the id, the last record wins).
+    static func tokenTotals(root: URL, now: Double) -> (fiveHour: Int, week: Int)? {
+        guard FileManager.default.fileExists(atPath: root.path),
+              let walker = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return nil }
+        let weekAgo = now - 7 * 24 * 3600
+        var perMessage: [String: (time: Double, tokens: Int)] = [:]
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            guard modified >= weekAgo, let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") {
+                guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let message = object["message"] as? [String: Any],
+                      let usage = message["usage"] as? [String: Any],
+                      let id = message["id"] as? String,
+                      let stamp = object["timestamp"] as? String,
+                      let time = parseTime(stamp) else { continue }
+                let tokens = ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+                    .reduce(0) { $0 + Int(CodexUsage.finiteNumber(usage[$1]) ?? 0) }
+                perMessage[id] = (time, tokens)
+            }
+        }
+        var five = 0, week = 0
+        for entry in perMessage.values where entry.time >= weekAgo {
+            week += entry.tokens
+            if entry.time >= now - 5 * 3600 { five += entry.tokens }
+        }
+        return (five, week)
+    }
+
+    static func parseTime(_ text: String) -> Double? {
+        (timeFormatter.date(from: text) ?? plainTimeFormatter.date(from: text))?.timeIntervalSince1970
+    }
+
+    static func compact(_ count: Int) -> String {
+        count >= 1_000_000 ? String(format: "%.1f M", Double(count) / 1e6) : String(format: "%.0f k", Double(count) / 1e3)
+    }
+}
+
 enum CodexUsageError: Error {
     case unavailable(String)
 }
@@ -950,6 +1095,19 @@ final class AppServerLink {
 if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--usage-find-codex" {
     if let path = CodexUsage.codexBinary() { print(path); exit(0) }
     exit(1)
+}
+if CommandLine.arguments.count >= 5 && CommandLine.arguments[1] == "--claude-check" {
+    let args = CommandLine.arguments
+    let snap = ClaudeUsage.read(now: Date(timeIntervalSince1970: Double(args[4]) ?? 0),
+                                planFile: URL(fileURLWithPath: args[2]), projects: URL(fileURLWithPath: args[3]))
+    var out: [String: Any] = [:]
+    if let v = snap.planObservedAt { out["planObservedAt"] = v }
+    if let v = snap.fiveHourUsed { out["fiveHourUsed"] = v }
+    if let v = snap.weekUsed { out["weekUsed"] = v }
+    if let v = snap.tokens5h { out["tokens5h"] = v }
+    if let v = snap.tokens7d { out["tokens7d"] = v }
+    print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
 }
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--usage-check" {
     let timeout = CommandLine.arguments.count >= 4 ? Double(CommandLine.arguments[3]) ?? CodexUsage.defaultTimeout : CodexUsage.defaultTimeout
