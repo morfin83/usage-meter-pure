@@ -15,6 +15,11 @@ NOW = 1_800_000_000
 
 
 class ClaudeHistoryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Build once per class, into a private folder.
+        build.setUpModule()
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -24,8 +29,6 @@ class ClaudeHistoryTests(unittest.TestCase):
         self.projects = self.dir / "projects"
         self.projects.mkdir()
         self.env = {"USAGE_METER_TEST_SUPPORT": str(self.support), "PATH": "/usr/bin:/bin"}
-        if build._build.get("binary") is None:
-            build.setUpModule()
 
     def reading(self, observed_ms, five, week):
         self.plan.write_text(json.dumps({"version": 2, "samples": [
