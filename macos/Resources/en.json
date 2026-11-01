@@ -45,5 +45,14 @@
   "%@: systém neudává kapacitu linky. Procento nelze určit.": "%@: link capacity unavailable. Cannot calculate percentage.",
   "První vzorek: %@, %@ Mb/s.": "First sample: %@, %@ Mb/s.",
   "%@: %@ Mb/s. Vytížení = vyšší z příjmu a odesílání / rychlost linky; nejde o rychlost internetového tarifu.": "%@: %@ Mb/s. Usage = busier direction / link speed, not internet plan speed.",
-  "Otevřít Usage Meter Pure": "Open Usage Meter Pure"
+  "Otevřít Usage Meter Pure": "Open Usage Meter Pure",
+  "Claude · zbývá 5 h": "Claude · 5 h remaining",
+  "Claude · zbývá týden": "Claude · week remaining",
+  "Claude: načítání…": "Claude: loading…",
+  "Čas resetu není v lokálním zdroji Claude.": "The reset time is not in the local Claude source.",
+  "Tokeny z Claude Code: 5 h %@ · 7 dní %@": "Tokens from Claude Code: 5 h %@ · 7 days %@",
+  "Tokeny z Claude Code: žádné místní záznamy": "Tokens from Claude Code: no local records",
+  "Claude: údaj není dostupný": "Claude: reading unavailable",
+  "Claude: starší údaj (%@ min)": "Claude: older reading (%@ min)",
+  "Claude: údaj z %@": "Claude: reading from %@"
 }
