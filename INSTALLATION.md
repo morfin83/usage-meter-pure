@@ -1,47 +1,79 @@
 # Usage Meter Pure — instalace
 
+Verze 0.6.1 build 11 (finální kandidát 0.6.1, zatím nevydáno).
+
 ## Co potřebujete
 
 - Mac s Apple Silicon M1 nebo novějším
 - macOS 13 nebo novější
-- aktuální ChatGPT desktop aplikaci
+- pro limity Codexu: ChatGPT desktop aplikaci nebo Codex CLI
+- pro limity Claude: Claude Code
 
-Python, Homebrew, OpenAI API klíč ani Terminál nejsou k instalaci potřeba.
-
-Aplikace čte limity přes Codex, který je součástí ChatGPT desktop aplikace (nebo samostatné Codex CLI, pokud ji máte nainstalovanou). Musíte být přihlášeni ke stejnému účtu.
+Python, Homebrew ani OpenAI API klíč nejsou potřeba. Terminál také ne (kromě odinstalace, viz níže).
 
 ## Instalace
 
-1. Stáhněte DMG z [GitHub Releases](https://github.com/morfin83/usage-meter-pure/releases/tag/v0.6.1-rc3) (soubor `Usage-Meter-Pure-0.6.1-RC3-build10-arm64.dmg`).
-2. Otevřete stažený DMG.
-3. Přetáhněte Usage Meter Pure do složky Aplikace (Applications).
-4. Vysuňte DMG.
-5. Spusťte Usage Meter Pure ze složky Aplikace.
+1. Otevřete DMG `Usage-Meter-Pure-0.6.1-build11` (soubor dostanete od autora; zatím není veřejně vydán).
+2. Přetáhněte Usage Meter Pure do složky Aplikace (Applications).
+3. Vysuňte DMG.
+4. Spusťte Usage Meter Pure ze složky Aplikace.
+
+Soubor: `Usage-Meter-Pure-0.6.1-build11-arm64.dmg`
+
+SHA-256: 764b00af7acaf9ef03db0003feae6d81e0761163b66dd9c10ba3b0c20f4b7779
 
 ## Pokud macOS aplikaci zablokuje
 
-Tato verze (RC3) nemá Apple Developer ID podpis ani Apple notarizaci, takže macOS může první spuštění zablokovat.
+Aplikace má jen ad-hoc podpis a není notarizovaná. macOS může první otevření zablokovat.
 
-Otevřete **Nastavení systému → Soukromí a zabezpečení** a u Usage Meter Pure zvolte **Přesto otevřít (Open Anyway)**. Zabezpečení macOS není potřeba vypínat ani obcházet.
+Otevřete **Nastavení systému → Soukromí a zabezpečení** a u Usage Meter Pure zvolte **Přesto otevřít (Open Anyway)**. Zabezpečení macOS není potřeba vypínat.
 
-## Ověření staženého souboru
+## Co aplikace udělá sama při prvním spuštění
 
-SHA-256:
+Nemusíte nic nastavovat. Aplikace zapíše položku `statusLine` do `~/.claude/settings.json` s příkazem `"<cesta k aplikaci>" --statusline`.
 
-`73a0e327b4aefda7a442dbc9b7d2284efac30ec1f9888801576b305266f538bb`
+- Ostatní klíče v souboru zůstanou beze změny.
+- Původní soubor se jednou zálohuje do `~/.claude/settings.json.usage-meter-backup.json`.
+- Pokud už máte vlastní status line, zůstane zachovaná. Spustí se po kroku aplikace (řetězení).
+- Když aplikaci přesunete, cesta se při dalším spuštění opraví.
+- Když složka `~/.claude` neexistuje (Claude Code není nainstalovaný), nic se nezapíše a panel to řekne. Nastavení se zopakuje při dalších spuštěních.
+- Když `settings.json` není platný JSON, aplikace ho nechá být.
 
-Kontrola je volitelná a určená pokročilým uživatelům. Terminál není povinnou součástí instalace.
+## Co uvidíte
 
-## Stav verze
+Panel se dvěma skupinami: Codex a Claude. Procenta jsou zbývající.
 
-Usage Meter Pure 0.6.1 RC3, build 10.
+- Limity Codexu přijdou z `codex app-server` (jen čtení).
+- Limity Claude přijdou z dat status line. Ta se objeví po prvním použití Claude Code se session na plánu Pro/Max. Do té doby (nebo když jsou starší než 1 hodinu) panel použije soubor Claude desktop aplikace a ukáže upozornění na stáří.
+- Časy resetu Claude jsou vidět jen když jsou data status line.
+- Součty tokenů Claude (5 h a 7 dní) pocházejí z logů Claude Code. Zahrnují cache tokeny a nejsou limitem předplatného.
 
-Jde o Release Candidate, tedy testovací verzi před finálním vydáním.
+## Soukromí
+
+- Režim status line ukládá jen čtyři čísla na okno: využité procento, čas resetu a čas pozorování.
+- Neukládá id session, cesty ani data přepisů.
+- Aplikace sama nepoužívá síť. Nepoužívá cookies, tokeny ani Klíčenku.
+
+## Odinstalace
+
+Přepínač v aplikaci zatím není. Spusťte v Terminálu:
+
+```sh
+"/Applications/Usage Meter Pure.app/Contents/MacOS/UsageMeter" --claude-setup uninstall
+```
+
+Příkaz vrátí vaši původní status line nebo klíč odstraní a smaže vlastní soubory aplikace. Potom můžete aplikaci smazat ze složky Aplikace.
+
+## Známá omezení
+
+- Procenta Claude jsou čerstvá jen při používání Claude Code. Jinak panel ukáže upozornění na stáří.
+- Soubor Claude desktop aplikace je nezdokumentovaný a může se změnit.
+- Nově neověřeno: čistý Mac s macOS 13+ a živá session Claude Code se status line.
 
 ## Nezávislost
 
-Usage Meter Pure je nezávislá aplikace a není produktem ani oficiální součástí OpenAI nebo Apple.
+Usage Meter Pure je nezávislá aplikace a není produktem ani oficiální součástí OpenAI, Anthropic ani Apple.
 
 ## Licence
 
-Usage Meter Pure je distribuován pod licencí MIT (soubor [LICENSE](LICENSE)). Kódy a licence třetích stran jsou uvedeny v [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT (soubor [LICENSE](LICENSE)). Licence třetích stran jsou v [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

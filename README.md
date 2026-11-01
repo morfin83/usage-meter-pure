@@ -1,43 +1,59 @@
 # Usage Meter Pure
 
-A small native macOS menu-bar and desktop panel (Apple Silicon, macOS 13+) that shows the shared Codex account limits (5-hour and weekly windows, reset times) next to local CPU, per-core CPU, memory, GPU and network load.
+Malý nativní panel pro macOS (lišta nabídek a plovoucí panel; Apple Silicon, macOS 13+). Ukazuje zbývající limity Codexu a Claude vedle lokálního zatížení CPU, jader, paměti, GPU a sítě.
 
 - Bundle identifier: `cz.pure.usagemeter`
-- Current version: 0.6.1 build 10 (RC3, published as a pre-release: [v0.6.1-rc3](https://github.com/morfin83/usage-meter-pure/releases/tag/v0.6.1-rc3))
-- Last published release: 0.6.0 build 8 (see [RELEASES.md](RELEASES.md))
-- Languages: Czech and English
-- Licence: MIT ([LICENSE](LICENSE)); third-party notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- Aktuální verze: 0.6.1 build 11 (finální kandidát 0.6.1, zatím nevydáno)
+- Naposledy vydáno: 0.6.0 build 8; pre-release [v0.6.1-rc3](https://github.com/morfin83/usage-meter-pure/releases/tag/v0.6.1-rc3) (viz [RELEASES.md](RELEASES.md))
+- Jazyky: čeština a angličtina
+- Licence: MIT ([LICENSE](LICENSE)); licence třetích stran v [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-## How the limits are read
+## Co panel ukazuje
 
-The app asks the locally installed Codex app-server for account limits with a single read-only request, `account/rateLimits/read`. It starts no conversations and spends no model tokens. The request is made by the native Swift code in `macos/UsageMeter.swift`; no Python runtime is needed on the user's Mac.
+Panel má dvě skupiny.
 
-The limits are shared account limits, not the tokens of a single conversation. Credit balances are shown only when the account reports them.
+### Codex
 
-## Repository layout
+Limity (5 hodin a týden) se čtou přes `codex app-server` jediným požadavkem `account/rateLimits/read`. Požadavek je jen pro čtení. Nezakládá konverzace a neutrácí tokeny. Zbytek čte nativní Swift kód v `macos/UsageMeter.swift`. Python není potřeba.
 
-- `macos/UsageMeter.swift` — the application (AppKit, IOKit, SystemConfiguration), including the native limits reader.
-- `macos/Resources/` — application icon, Czech and English strings.
-- `scripts/build_macos.sh` — builds and ad-hoc signs the `.app` into a folder you choose.
-- `scripts/make_app_icon.sh` — regenerates the icon.
-- `scripts/usage_meter.py` — reference implementation of the limits reader, kept for tests. It is not part of the app bundle.
-- `tests/` — unit tests for the reader and for the compiled Swift adapter.
-- `docs/` — project documentation (status, architecture, backlog, decisions, release process).
+### Claude
 
-## Build and test
+Limity (5 hodin a 7 dní) se berou v tomto pořadí:
+
+1. **Data status line z Claude Code.** Aplikace je ukládá do `~/Library/Application Support/Usage Meter Pure/claude-statusline.json`. Jde o oficiální JSON status line (`five_hour` a `seven_day`: `used_percentage`, `resets_at`). Data existují jen když Claude Code běží se session na plánu Pro/Max. Jsou čerstvá 1 hodinu.
+2. **Záloha: soubor Claude desktop aplikace** `~/Library/Application Support/Claude/plan-usage-history.json`. Je nezdokumentovaný, ukazuje využité procento a nemá časy resetu. Po 1 hodině se označí jako starý.
+
+Procenta se ukazují jako zbývající.
+
+Součty tokenů Claude (5 h a 7 dní) se sčítají z logů Claude Code v `~/.claude/projects` (podle id zprávy, platí poslední záznam). Zahrnují cache tokeny a **nejsou** limitem předplatného.
+
+Při prvním spuštění si aplikace sama nastaví status line v `~/.claude/settings.json`. Podrobnosti jsou v [INSTALLATION.md](INSTALLATION.md).
+
+## Struktura repozitáře
+
+- `macos/UsageMeter.swift` — aplikace (AppKit, IOKit, SystemConfiguration), nativní čtečka limitů a režim status line (`--statusline`).
+- `macos/Resources/` — ikona aplikace, české a anglické texty.
+- `scripts/build_macos.sh` — sestaví a ad-hoc podepíše `.app` do zvolené složky.
+- `scripts/make_dmg.sh` — vytvoří DMG.
+- `scripts/make_app_icon.sh` — vygeneruje ikonu.
+- `scripts/usage_meter.py` — pouze referenční implementace čtečky pro testy. Není součástí aplikace.
+- `tests/` — testy čtečky, adaptéru a Claude zdrojů.
+- `docs/` — dokumentace projektu.
+
+## Sestavení a testy
 
 ```sh
 python3 -m unittest discover -s tests -v
-sh scripts/build_macos.sh /path/to/an/empty/output/folder
-sh scripts/make_dmg.sh "/path/to/Usage Meter Pure.app" /path/to/output-folder Usage-Meter-Pure-0.6.1-build10
+sh scripts/build_macos.sh /cesta/k/prazdne/slozce
+sh scripts/make_dmg.sh "/cesta/k/Usage Meter Pure.app" /cesta/k/vystupni/slozce Usage-Meter-Pure-0.6.1-build11
 ```
 
-The tests compile the Swift code with `xcrun swiftc`, so Command Line Tools are needed on the build machine only. End users need none of them.
+Testy kompilují Swift přes `xcrun swiftc`, Command Line Tools tedy potřebuje jen sestavovací Mac. Koncový uživatel je nepotřebuje.
 
-## Privacy
+## Soukromí
 
-The app sends nothing over the network itself. It reads the account limits through the local Codex app-server. See [INSTALLATION.md](INSTALLATION.md) for installation and Gatekeeper notes.
+Aplikace sama nepoužívá síť. Nepoužívá cookies, tokeny ani Klíčenku. Režim status line ukládá jen čtyři čísla na okno (využité procento, čas resetu, čas pozorování), ne id session, cesty ani přepisy. Viz [INSTALLATION.md](INSTALLATION.md).
 
-## Reporting bugs
+## Hlášení chyb
 
-Please use the [issue tracker](https://github.com/morfin83/usage-meter-pure/issues) and the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md).
+Použijte [issue tracker](https://github.com/morfin83/usage-meter-pure/issues) a [šablonu hlášení chyb](.github/ISSUE_TEMPLATE/bug_report.md).

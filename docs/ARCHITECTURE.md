@@ -1,32 +1,55 @@
-# Architecture
+# Architektura
 
-## Components (macos/UsageMeter.swift, one file)
-- `AppDelegate` — status item, floating panel, timers, preferences (`UserDefaults`), quit handling.
-- `SystemSampler` — CPU total and per logical core (`host_processor_info`), memory (`host_statistics64`), GPU (`IOAccelerator` `PerformanceStatistics`), active network interface.
+## Komponenty (`macos/UsageMeter.swift`, jeden soubor)
+- `AppDelegate` — stavová položka, plovoucí panel, časovače, předvolby (`UserDefaults`), ukončení.
+- `SystemSampler` — CPU celkem a po jádrech, paměť, GPU (`IOAccelerator`), aktivní síťové rozhraní.
 - UI: `MeterRow`, `PastelBar`, `DragHeader`, `OverlayPanel`, `Palette`.
-- `CodexUsage` — discovery of the Codex binary and the sanitized snapshot builder.
-- `AppServerLink` — one `codex app-server --stdio --disable hooks` child process, JSON-RPC over pipes.
-- Localisation: `macos/Resources/cs.json`, `en.json`.
+- `CodexUsage` — hledání binárky Codexu a sestavení očištěného snímku.
+- `AppServerLink` — jeden podproces `codex app-server --stdio --disable hooks`, JSON-RPC přes roury.
+- `ClaudeUsage` — Claude zdroje (viz níže).
+- Lokalizace: `macos/Resources/cs.json`, `en.json`.
 
-## Data flow: account limits
-1. Timer (every 60 s, and on demand) calls `fetchUsage()`. A guard prevents parallel refreshes.
-2. Background queue: `CodexUsage.codexBinary()` searches `PATH` plus `/opt/homebrew/bin` and `/usr/local/bin`, then the ChatGPT/Codex app bundles.
-3. `CodexUsage.read()` starts the app-server and sends `initialize`, `initialized`, `account/rateLimits/read`. Any server-initiated request is refused with an error. Timeout 12 s. Nothing else is sent.
-4. `CodexUsage.snapshot()` whitelists fields, clamps percentages, rejects booleans as numbers, marks expired resets as pending (never as replenished), and drops account IDs, tokens and reset credits.
-5. Main queue: `applyUsage()` updates the rows; an old value is marked as stale after 120 s or when a refresh fails.
-6. `applicationWillTerminate` terminates the child process.
+## Tok dat: Codex
+1. Časovač (60 s a na požádání) volá `fetchUsage()`. Zámek brání paralelnímu čtení.
+2. `CodexUsage.codexBinary()` hledá v `PATH` plus `/opt/homebrew/bin` a `/usr/local/bin`, pak v balíčcích ChatGPT/Codex.
+3. `CodexUsage.read()` spustí app-server a pošle `initialize`, `initialized`, `account/rateLimits/read`. Požadavky serveru odmítne. Timeout 12 s.
+4. `CodexUsage.snapshot()` povolí jen známá pole, ořízne procenta, odmítne boolean jako číslo, prošlý reset označí jako čekající a zahodí id účtu a tokeny.
+5. Hlavní fronta: `applyUsage()` aktualizuje řádky; stará hodnota se označí po 120 s nebo při selhání.
+6. `applicationWillTerminate` ukončí podproces.
 
-## Reference adapter
-`scripts/usage_meter.py` implements the same logic in Python and is covered by `tests/test_usage_meter.py`. It is not bundled. Keep both in step when the protocol changes.
+## Tok dat: Claude
+Limity, v tomto pořadí:
+1. **Status line.** Claude Code spustí `"<cesta k aplikaci>" --statusline` a pošle JSON na stdin. Aplikace uloží `five_hour` a `seven_day` (`used_percentage`, `resets_at`) a čas pozorování do `~/Library/Application Support/Usage Meter Pure/claude-statusline.json`. Data jsou čerstvá 1 hodinu. Pak (řetězení) spustí původní status line uživatele.
+2. **Záloha.** `~/Library/Application Support/Claude/plan-usage-history.json` (nezdokumentovaný; využité procento; bez časů resetu; po 1 hodině označeno jako staré).
 
-## Test hooks
-`UsageMeter --usage-check <binary> [timeout]` and `UsageMeter --usage-find-codex` exist for `tests/test_native_adapter.py`. They do not change normal launch.
+Tokeny: `ClaudeUsage.tokenTotals` sčítá `message.usage` z `~/.claude/projects/**/*.jsonl` (podle id zprávy, platí poslední záznam). Zahrnuje cache tokeny a není limitem předplatného.
 
-## Build
-`scripts/build_macos.sh` compiles with `xcrun swiftc -target arm64-apple-macos13.0`, copies resources, writes `Info.plist`, cleans extended attributes and signs ad-hoc with bounded retries.
+Obojí běží na pozadí spolu se čtením Codexu; `applyClaude` aktualizuje řádky na hlavní frontě.
 
-## Claude sources (branch feat/claude-usage-sources)
-- `ClaudeUsage.planSnapshot` reads `~/Library/Application Support/Claude/plan-usage-history.json` (version 2, newest sample, `fh`/`sd` as used %, values outside 0–100 dropped).
-- `ClaudeUsage.tokenTotals` sums `message.usage` from `~/.claude/projects/**/*.jsonl` (files modified in the last 7 days; one entry per message id).
-- Both run on the background refresh queue together with the Codex read; `applyClaude` updates the rows on the main queue.
-- Test hook: `UsageMeter --claude-check <plan> <projects> <nowEpoch>`.
+## Automatické nastavení status line
+Při každém spuštění aplikace zajistí položku `statusLine` v `~/.claude/settings.json` s příkazem `"<cesta k aplikaci>" --statusline`.
+- Ostatní klíče se zachovají.
+- Originál se jednou zálohuje do `~/.claude/settings.json.usage-meter-backup.json`.
+- Existující status line uživatele se zachová a spouští se po kroku aplikace.
+- Po přesunu aplikace se cesta opraví při dalším spuštění.
+- Bez složky `~/.claude` se nic nezapíše, panel to oznámí a nastavení se zopakuje při dalším spuštění.
+- Neplatný JSON v `settings.json` se nemění.
+- Odinstalace: `UsageMeter --claude-setup uninstall` vrátí předchozí status line nebo klíč odstraní a smaže vlastní soubory aplikace.
+
+## Umístění souborů
+| Soubor | Účel |
+|---|---|
+| `~/.claude/settings.json` | zde aplikace zapisuje `statusLine` |
+| `~/.claude/settings.json.usage-meter-backup.json` | jednorázová záloha originálu |
+| `~/Library/Application Support/Usage Meter Pure/claude-statusline.json` | data status line |
+| `~/Library/Application Support/Claude/plan-usage-history.json` | záloha limitů (čte se, nezapisuje) |
+| `~/.claude/projects/**/*.jsonl` | logy pro součty tokenů (čtou se) |
+
+## Referenční adaptér
+`scripts/usage_meter.py` implementuje stejnou logiku čtečky v Pythonu pro testy. Není v balíčku.
+
+## Testovací přepínače
+`--usage-check`, `--usage-find-codex`, `--claude-check` slouží testům. Normální spuštění nemění.
+
+## Sestavení
+`scripts/build_macos.sh` kompiluje přes `xcrun swiftc -target arm64-apple-macos13.0`, zkopíruje zdroje, zapíše `Info.plist`, vyčistí rozšířené atributy a podepíše ad-hoc. `scripts/make_dmg.sh` vytvoří DMG.

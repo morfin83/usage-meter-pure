@@ -2,6 +2,21 @@
 
 Only facts that were checked are listed here. Checksums are SHA-256 of the distributed DMG.
 
+## 0.6.1 build 11 — release (pending approval)
+
+- Finální kandidát 0.6.1, CFBundleVersion 11. Zatím nevydáno, bez tagu a bez veřejného DMG.
+- Změny:
+  - nativní čtečka limitů (bez Pythonu),
+  - Codex se najde i při spuštění z Finderu,
+  - skupina Claude v panelu: limity ze status line Claude Code, záloha ze souboru Claude desktop aplikace, součty tokenů z logů Claude Code,
+  - automatické nastavení status line v `~/.claude/settings.json` (záloha, řetězení vlastní status line),
+  - skript `scripts/make_dmg.sh`,
+  - dokumentace.
+- SHA-256: 764b00af7acaf9ef03db0003feae6d81e0761163b66dd9c10ba3b0c20f4b7779
+- Podpis: ad-hoc. Bez notarizace.
+- Ověřeno: 38 Python testů prošlo; sestavení a ad-hoc podpis lokálně.
+- Neověřeno: čistý Mac s macOS 13+; živá session Claude Code se zobrazenou status line; první otevření přes Gatekeeper.
+
 ## 0.6.1 build 10 — release candidate 3 (RC3, published as a pre-release)
 
 - Changes since RC2: native Codex limits reader (no Python), Codex lookup from Finder launch, read-only tests, docs.

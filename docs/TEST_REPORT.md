@@ -1,22 +1,23 @@
-# Test report
+# Zpráva o testech
 
-Date: 2026-11-01. Branch: `fix/native-usage-adapter`.
+Datum: 2026-11-01. Větev: `release/0.6.1`. Verze 0.6.1 build 11.
 
-## Commands and results
-- `python3 -m unittest discover -s tests -v` — 21 tests: 10 for the Python reference, 11 for the native Swift reader (compiled with `xcrun swiftc`, driven through test hooks against fake app-servers). **OK.**
-- `sh scripts/build_macos.sh <empty scratch folder>` — **OK**; `codesign --verify --deep --strict` passes; the bundle has no `.py` file.
-- Real read-only check with the built binary: `UsageMeter --usage-check /opt/homebrew/bin/codex` — **OK**, returned 5-hour and weekly windows and a credit balance of 0. No tokens spent.
-- `UsageMeter --usage-find-codex` — **OK**, returned `/opt/homebrew/bin/codex`.
-- `UsageMeter --sample` — **OK**, returned CPU values.
+## Příkazy a výsledky
+- `python3 -m unittest discover -s tests -v` — **38 testů prošlo.**
+- `sh scripts/build_macos.sh <prázdná složka>` — sestavení a ad-hoc podpis v pořádku.
 
-## Covered by tests
-Handshake and single usage read; server requests refused; timeout bounded; server errors and invalid results do not leak payload; closed pipe is an error; clamping of percentages; boolean values rejected as numbers; expired resets are pending; private fields dropped; numeric credit balances only; PATH discovery.
+## Testovací soubory
+- `tests/test_usage_meter.py` — referenční Python čtečka Codexu.
+- `tests/test_native_adapter.py` — nativní Swift čtečka (kompilace přes `xcrun swiftc`, falešné app-servery).
+- `tests/test_claude_sources.py` — Claude zdroje: soubor desktop aplikace a součty tokenů.
+- `tests/test_claude_statusline.py` — režim status line a automatické nastavení.
 
-## Checked on the RC2 DMG (before the change)
-Checksum recomputed and matched; bundle identifier and version correct; arm64; ad-hoc signature valid; bundled `usage_meter.py` identical to the then-current public source.
+## Pokryto testy
+Handshake a jedno čtení; odmítnutí požadavků serveru; omezený timeout; chyby bez úniku obsahu; oříznutí procent; boolean není číslo; prošlý reset je "čeká"; zahozená soukromá pole; hledání v `PATH`; Claude zdroje; status line a nastavení `settings.json`.
 
-## Not verified (NEOVĚŘENO)
-- Launch and interaction of the GUI app (panel, refresh, quit): not done in this session.
-- Clean macOS 13+ machine without developer tools; first-open Gatekeeper path; drag-to-Applications install.
-- Localisation review; visual layout at all sizes.
-- Behaviour with other Codex versions.
+## NEOVĚŘENO
+- Čistý Mac s macOS 13+ bez vývojářských nástrojů, první otevření přes Gatekeeper, instalace přetažením.
+- Živá session Claude Code se zobrazenou status line.
+- Interakce GUI (panel, obnovení, ukončení) v celém rozsahu.
+- Revize lokalizace a vzhled ve všech velikostech.
+- Jiné verze Codexu než 0.165.0.

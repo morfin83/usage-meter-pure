@@ -1,21 +1,25 @@
-# Feature matrix
+# Matice funkcí
 
-Status key: DONE = implemented and covered by a check in this repository; PARTIAL = implemented, not fully verified; PLANNED = not implemented; REJECTED = decided against.
+Stavy: DONE = hotovo a kryto kontrolou v repozitáři; PARTIAL = hotovo, ne zcela ověřeno; PLANNED = neimplementováno; DEFERRED = odloženo; REJECTED = zamítnuto.
 
-| Feature | Status | Evidence |
+| Funkce | Stav | Doklad |
 |---|---|---|
-| 5-hour and weekly Codex limits, percent remaining | DONE | live read 2026-11-01; `test_native_adapter.py` |
-| Reset time per window, pending state after reset | DONE | `test_expired_reset_is_pending_and_never_replenishes` |
-| Credit balance when the account reports it | DONE | `test_numeric_credit_balance_is_kept` |
-| Automatic refresh (60 s) and manual refresh | PARTIAL | code path present; GUI not exercised in this session |
-| CPU total and per logical core | PARTIAL | `--sample` output checked; per-core values shown |
-| Memory usage | PARTIAL | code present; not compared with Activity Monitor |
-| GPU load and core info | PARTIAL | driver-dependent; may show unavailable |
-| Active network interface load | PARTIAL | code present |
-| Collapsible panel and detail switches | PARTIAL | previously verified in older versions (VALIDATION.md) |
-| Remembered settings | PARTIAL | `UserDefaults` keys in code |
-| Czech and English | PARTIAL | `cs.json`/`en.json` present; not fully reviewed |
-| Runs without Python on the user's Mac | DONE | native reader; no `python3` in the bundle |
-| Clean install on macOS 13+ | PLANNED | needs a clean Mac or VM (NEOVĚŘENO) |
-| Developer ID signing and notarization | DEFERRED | not required now; ad-hoc only (owner decision) |
-| Token usage per conversation | REJECTED | the app shows account limits only; not token accounting |
+| Limity Codexu 5 h a týden, zbývající procenta | DONE | živé čtení; `test_native_adapter.py` |
+| Čas resetu, stav "čeká" po resetu | DONE | `test_usage_meter.py` |
+| Zůstatek kreditů, když ho účet hlásí | DONE | `test_usage_meter.py` |
+| Claude limity ze status line (`five_hour`, `seven_day`, procento a reset) | DONE | `test_claude_statusline.py`; živá session NEOVĚŘENO |
+| Záloha: soubor Claude desktop aplikace (bez resetu, staré po 1 h) | DONE | `test_claude_sources.py`; soubor je nezdokumentovaný |
+| Součty tokenů Claude z logů Claude Code (5 h, 7 dní) | DONE | `test_claude_sources.py` |
+| Automatické nastavení status line při prvním spuštění | DONE | `test_claude_statusline.py` |
+| Řetězení stávající status line, záloha `settings.json` | DONE | `test_claude_statusline.py` |
+| Odinstalace přes CLI (`--claude-setup uninstall`) | DONE | příkaz v Terminálu; přepínač v aplikaci chybí |
+| Přepínač nastavení status line v aplikaci | PLANNED | viz BACKLOG |
+| Automatické (60 s) a ruční obnovení | PARTIAL | kód je; GUI neprověřeno |
+| CPU celkem a po jádrech | PARTIAL | `--sample` |
+| Paměť, GPU, síť | PARTIAL | kód je; závisí na ovladači |
+| Skládací panel, zapamatovaná nastavení | PARTIAL | `UserDefaults` |
+| Čeština a angličtina | PARTIAL | `cs.json`/`en.json`; angličtina bez revize rodilým mluvčím |
+| Běh bez Pythonu | DONE | nativní čtečka |
+| Čistá instalace na macOS 13+ | PLANNED | NEOVĚŘENO |
+| Developer ID a notarizace | DEFERRED | jen ad-hoc (rozhodnutí vlastníka) |
+| Účtování tokenů jedné konverzace | REJECTED | aplikace ukazuje limity účtu |
