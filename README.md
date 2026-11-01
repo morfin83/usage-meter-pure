@@ -3,7 +3,7 @@
 A small native macOS menu-bar and desktop panel (Apple Silicon, macOS 13+) that shows the shared Codex account limits (5-hour and weekly windows, reset times) next to local CPU, per-core CPU, memory, GPU and network load.
 
 - Bundle identifier: `cz.pure.usagemeter`
-- Current version: 0.6.1 build 10 (RC3, local build; not published)
+- Current version: 0.6.1 build 10 (RC3, published as a pre-release: [v0.6.1-rc3](https://github.com/morfin83/usage-meter-pure/releases/tag/v0.6.1-rc3))
 - Last published release: 0.6.0 build 8 (see [RELEASES.md](RELEASES.md))
 - Languages: Czech and English
 - Licence: MIT ([LICENSE](LICENSE)); third-party notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)

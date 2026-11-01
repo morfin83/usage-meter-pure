@@ -12,7 +12,7 @@ Aplikace čte limity přes Codex, který je součástí ChatGPT desktop aplikace
 
 ## Instalace
 
-1. Stáhněte DMG z oficiálního webu.
+1. Stáhněte DMG z [GitHub Releases](https://github.com/morfin83/usage-meter-pure/releases/tag/v0.6.1-rc3) (soubor `Usage-Meter-Pure-0.6.1-RC3-build10-arm64.dmg`).
 2. Otevřete stažený DMG.
 3. Přetáhněte Usage Meter Pure do složky Aplikace (Applications).
 4. Vysuňte DMG.
@@ -20,7 +20,7 @@ Aplikace čte limity přes Codex, který je součástí ChatGPT desktop aplikace
 
 ## Pokud macOS aplikaci zablokuje
 
-Tato RC2 zatím nemá Apple Developer ID podpis ani Apple notarizaci, takže macOS může první spuštění zablokovat.
+Tato verze (RC3) nemá Apple Developer ID podpis ani Apple notarizaci, takže macOS může první spuštění zablokovat.
 
 Otevřete **Nastavení systému → Soukromí a zabezpečení** a u Usage Meter Pure zvolte **Přesto otevřít (Open Anyway)**. Zabezpečení macOS není potřeba vypínat ani obcházet.
 
@@ -28,13 +28,13 @@ Otevřete **Nastavení systému → Soukromí a zabezpečení** a u Usage Meter 
 
 SHA-256:
 
-`4cdb79fed1121905ec5ddda7f799ab26d4531191851c81e388fa316fa0d4aa36`
+`73a0e327b4aefda7a442dbc9b7d2284efac30ec1f9888801576b305266f538bb`
 
 Kontrola je volitelná a určená pokročilým uživatelům. Terminál není povinnou součástí instalace.
 
 ## Stav verze
 
-Usage Meter Pure 0.6.1 RC2, build 9.
+Usage Meter Pure 0.6.1 RC3, build 10.
 
 Jde o Release Candidate, tedy testovací verzi před finálním vydáním.
 
