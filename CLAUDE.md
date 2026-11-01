@@ -5,7 +5,7 @@ Veřejný repozitář aplikace (MIT). Zdroje: `macos/UsageMeter.swift`, `scripts
 ## Build a testy
 - Testy: `python3 -m unittest discover -s tests`
 - Sestavení aplikace: `sh scripts/build_macos.sh <výstupní složka>` (arm64, minimum macOS 13). Výchozí podpis je ad-hoc.
-- DMG: skript `create_release_dmg.command` v tomto repozitáři zatím není (je jen v soukromém repozitáři). Vzniklé DMG nekommituj.
+- DMG: `sh scripts/make_dmg.sh <App.app> <výstupní složka> <název>` (nevytváří složku, nepřepisuje existující DMG, zapíše `.sha256`). Vzniklé DMG nekommituj.
 
 ## Vydání
 - Vydání, nová verze a publikace DMG vyžadují výslovný souhlas. Podpis Developer ID a notarizace jsou vyřazené, dokud vlastník neřekne jinak.
