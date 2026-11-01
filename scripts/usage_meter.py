@@ -97,8 +97,18 @@ def footer(data):
     return "Codex · " + (" · ".join(parts) if parts else "limits unavailable") + f" · checked {stamp}"
 
 
+EXTRA_SEARCH_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
+def search_path():
+    """A Finder-launched app gets a minimal PATH, so Homebrew and npm locations are added."""
+    dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    dirs += [d for d in EXTRA_SEARCH_DIRS if d not in dirs]
+    return os.pathsep.join(dirs)
+
+
 def codex_binary():
-    binary = shutil.which("codex")
+    binary = shutil.which("codex", path=search_path())
     if binary:
         return binary
     candidates = [
@@ -115,8 +125,9 @@ def codex_binary():
 def read_live(timeout=12, command=None):
     """No thread/start or turn/start: this only performs a metadata read."""
     command = command or [codex_binary(), "app-server", "--stdio", "--disable", "hooks"]
+    env = dict(os.environ, PATH=search_path())
     proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, text=True, encoding="utf-8")
+                            stderr=subprocess.DEVNULL, text=True, encoding="utf-8", env=env)
     messages = queue.Queue(maxsize=128)
 
     def drain():

@@ -112,6 +112,10 @@ print(json.dumps({'id':req['id'],'error':{'message':'secret-account-token'}}),fl
 
             self.assertEqual(meter.codex_binary(), target_path)
 
+    def test_search_path_adds_homebrew_when_app_has_minimal_path(self):
+        with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
+            self.assertIn("/opt/homebrew/bin", meter.search_path().split(os.pathsep))
+
 
 if __name__ == "__main__":
     unittest.main()
