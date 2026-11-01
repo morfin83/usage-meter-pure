@@ -306,8 +306,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var canvas: NSView!
     let showSwitch = NSSwitch()
     let detailSwitch = NSSwitch()
-    let quota = MeterRow(L("Zbývá · krátkodobý limit"), remaining: true, tint: Palette.quota)
-    let weekly = MeterRow(L("Zbývá · dlouhodobý limit"), remaining: true, tint: Palette.weekly)
+    let quota = GaugeRow(L("Zbývá · krátkodobý limit"), key: "codex.5h", tint: Palette.quota, series: \.five)
+    let weekly = GaugeRow(L("Zbývá · dlouhodobý limit"), key: "codex.week", tint: Palette.weekly, series: \.week)
     let cpu = MeterRow("CPU", tint: Palette.cpu)
     let ram = MeterRow("RAM", tint: Palette.ram)
     let gpu = MeterRow("GPU", tint: Palette.gpu)
@@ -316,14 +316,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let creditLabel = NSTextField(labelWithString: L("Tokeny: API neposkytuje"))
     let codexTitle = NSTextField(labelWithString: "Codex")
     let claudeTitle = NSTextField(labelWithString: "Claude")
-    let claudeFive = MeterRow(L("Claude · zbývá 5 h"), remaining: true, tint: Palette.claude)
-    let claudeWeek = MeterRow(L("Claude · zbývá týden"), remaining: true, tint: Palette.claude)
+    let claudeFive = GaugeRow(L("Claude · zbývá 5 h"), key: "claude.5h", tint: Palette.claude, series: \.five)
+    let claudeWeek = GaugeRow(L("Claude · zbývá týden"), key: "claude.week", tint: Palette.claude, series: \.week)
     let claudeTokens = NSTextField(labelWithString: "")
     let claudeUpdated = NSTextField(labelWithString: L("Claude: načítání…"))
     let claudeSetupLabel = NSTextField(labelWithString: "")
     let claudeLive = NSTextField(labelWithString: "")
-    let claudeChart = SparkLine()
-    let claudeLegend = NSTextField(labelWithString: L("Využito · 5 h (oranžová) · týden (žlutá) · posledních 24 h"))
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -350,7 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         telemetryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.sample()
         }
-        usageTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.fetchUsage()
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(focusChanged),
@@ -455,9 +453,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             title.textColor = .secondaryLabelColor
         }
         claudeLive.font = .systemFont(ofSize: 9, weight: .medium)
-        claudeLegend.font = .systemFont(ofSize: 9)
-        claudeLegend.textColor = .tertiaryLabelColor
-        claudeChart.heightAnchor.constraint(equalToConstant: 44).isActive = true
         for note in [claudeTokens, claudeUpdated, claudeSetupLabel] {
             note.font = .systemFont(ofSize: 9)
             note.textColor = .tertiaryLabelColor
@@ -476,7 +471,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aiSwitch.setAccessibilityLabel(L("Zobrazit AI"))
         let aiHeader = NSStackView(views: [NSTextField(labelWithString: "AI"), NSView(), aiSwitch])
         aiHeader.orientation = .horizontal
-        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeChart, claudeLegend, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
            let source = CIImage(contentsOf: url) {
@@ -700,7 +696,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ClaudeHistory.record(claude, now: Date().timeIntervalSince1970)
             let history = ClaudeHistory.load()
             DispatchQueue.main.async { self?.applyClaude(claude, history: history) }
+            var codexHistory: [UsageSample] = []
+            if let data = data {
+                CodexHistory.record(data, now: Date().timeIntervalSince1970)
+                codexHistory = CodexHistory.load()
+            }
             let result = data
+            let codexSamples = codexHistory
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isFetching = false
@@ -711,15 +713,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.updated.textColor = .systemOrange
                     return
                 }
-                self.applyUsage(data)
+                self.applyUsage(data, history: codexSamples)
             }
         }
     }
 
-    func applyClaude(_ snap: ClaudeSnapshot, history: [ClaudeSample]) {
+    func applyClaude(_ snap: ClaudeSnapshot, history: [UsageSample]) {
         let now = Date().timeIntervalSince1970
-        claudeChart.samples = history
-        claudeChart.now = now
+        claudeFive.samples = history
+        claudeWeek.samples = history
         if let newest = history.last?.t {
             let age = now - newest
             if age <= 600 {
@@ -743,8 +745,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         claudeFive.update(snap.fiveHourUsed.map { 100 - $0 }, tooltip: resetText(snap.fiveHourResetsAt))
         claudeWeek.update(snap.weekUsed.map { 100 - $0 }, tooltip: resetText(snap.weekResetsAt))
-        claudeFive.alphaValue = stale ? 0.5 : 1
-        claudeWeek.alphaValue = stale ? 0.5 : 1
+        claudeFive.isStale = stale
+        claudeWeek.isStale = stale
         if let five = snap.tokens5h, let week = snap.tokens7d {
             claudeTokens.stringValue = LF("Tokeny z Claude Code: 5 h %@ · 7 dní %@", ClaudeUsage.compact(five), ClaudeUsage.compact(week))
         } else {
@@ -767,7 +769,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func applyUsage(_ data: [String: Any]) {
+    func applyUsage(_ data: [String: Any], history: [UsageSample]) {
+        quota.samples = history
+        weekly.samples = history
         let buckets = data["buckets"] as? [[String: Any]] ?? []
         guard let bucket = buckets.first(where: { $0["id"] as? String == "codex" }) ?? buckets.first else {
             quota.update(nil); weekly.update(nil)
@@ -1171,33 +1175,37 @@ if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--usage-chec
     }
 }
 
-// MARK: - Claude history (samples kept locally for 7 days, drawn as curves for the last 24 hours)
+// MARK: - Usage history (7 days, local) and the gauge that shows it
 
-struct ClaudeSample: Codable {
+struct UsageSample: Codable {
     let t: Double
     let five: Double?
     let week: Double?
 }
 
-enum ClaudeHistory {
+/// Local history per source. A sample is skipped when it repeats the newest reading,
+/// or when the values did not change for five minutes.
+enum UsageHistory {
     static let keepSeconds: Double = 7 * 24 * 3600
     static let maxSamples = 4000
-    static var file: URL { AppSupport.directory.appendingPathComponent("claude-history.json") }
 
-    /// Stores a sample only when the source reports a new observation time.
-    static func record(_ snap: ClaudeSnapshot, now: Double) {
-        guard let observed = snap.planObservedAt else { return }
-        var items = load()
-        guard items.last.map({ $0.t != observed }) ?? true else { return }
-        items.append(ClaudeSample(t: observed, five: snap.fiveHourUsed, week: snap.weekUsed))
-        items = items.filter { now - $0.t <= keepSeconds }
-        if items.count > maxSamples { items.removeFirst(items.count - maxSamples) }
-        if let data = try? JSONEncoder().encode(items) { try? AppSupport.writeAtomically(data, to: file) }
+    static func load(_ name: String) -> [UsageSample] {
+        guard let data = try? Data(contentsOf: AppSupport.directory.appendingPathComponent(name)) else { return [] }
+        return ((try? JSONDecoder().decode([UsageSample].self, from: data)) ?? []).sorted { $0.t < $1.t }
     }
 
-    static func load() -> [ClaudeSample] {
-        guard let data = try? Data(contentsOf: file) else { return [] }
-        return ((try? JSONDecoder().decode([ClaudeSample].self, from: data)) ?? []).sorted { $0.t < $1.t }
+    static func append(_ name: String, _ sample: UsageSample, now: Double) {
+        var items = load(name)
+        if let last = items.last {
+            if last.t == sample.t { return }
+            if last.five == sample.five && last.week == sample.week && sample.t - last.t < 300 { return }
+        }
+        items.append(sample)
+        items = items.filter { now - $0.t <= keepSeconds }
+        if items.count > maxSamples { items.removeFirst(items.count - maxSamples) }
+        if let data = try? JSONEncoder().encode(items) {
+            try? AppSupport.writeAtomically(data, to: AppSupport.directory.appendingPathComponent(name))
+        }
     }
 
     static func ageText(_ seconds: Double) -> String {
@@ -1208,36 +1216,194 @@ enum ClaudeHistory {
     }
 }
 
-/// Two curves (5 h and week, used %) over the last 24 hours. Gaps longer than 30 minutes are not joined.
-final class SparkLine: NSView {
-    var samples: [ClaudeSample] = [] { didSet { needsDisplay = true } }
+enum ClaudeHistory {
+    static let file = "claude-history.json"
+
+    /// Stores a sample only when the source reports a new observation time.
+    static func record(_ snap: ClaudeSnapshot, now: Double) {
+        guard let observed = snap.planObservedAt else { return }
+        UsageHistory.append(file, UsageSample(t: observed, five: snap.fiveHourUsed, week: snap.weekUsed), now: now)
+    }
+
+    static func load() -> [UsageSample] { UsageHistory.load(file) }
+    static func ageText(_ seconds: Double) -> String { UsageHistory.ageText(seconds) }
+}
+
+enum CodexHistory {
+    static let file = "codex-history.json"
+
+    /// Used percent per window, from the remaining percent of the Codex snapshot.
+    static func record(_ data: [String: Any], now: Double) {
+        let buckets = data["buckets"] as? [[String: Any]] ?? []
+        guard let bucket = buckets.first(where: { $0["id"] as? String == "codex" }) ?? buckets.first else { return }
+        let windows = bucket["windows"] as? [[String: Any]] ?? []
+        func used(_ slot: String) -> Double? {
+            guard let window = windows.first(where: { $0["slot"] as? String == slot }),
+                  let remaining = CodexUsage.finiteNumber(window["remainingPercent"]) else { return nil }
+            return 100 - remaining
+        }
+        let five = used("primary"), week = used("secondary")
+        guard five != nil || week != nil else { return }
+        UsageHistory.append(file, UsageSample(t: now, five: five, week: week), now: now)
+    }
+
+    static func load() -> [UsageSample] { UsageHistory.load(file) }
+}
+
+enum GaugeMode: String {
+    case bar, curve
+}
+
+/// Bar mode: three zones (green low, orange medium, red high use) with an arrow at the current use.
+/// Curve mode: the same value over the last 24 hours. A click switches between the two.
+final class UsageGauge: NSView {
+    var mode: GaugeMode = .bar { didSet { needsDisplay = true } }
+    var used: Double? { didSet { needsDisplay = true } }
+    var samples: [UsageSample] = [] { didSet { needsDisplay = true } }
+    var series: KeyPath<UsageSample, Double?> = \.five
+    var tint: NSColor = .controlAccentColor
     var now: Double = Date().timeIntervalSince1970 { didSet { needsDisplay = true } }
+    var onToggle: (() -> Void)?
     private let span: Double = 24 * 3600
 
+    override func mouseDown(with event: NSEvent) { onToggle?() }
+
     override func draw(_ dirtyRect: NSRect) {
+        switch mode {
+        case .bar: drawBar()
+        case .curve: drawCurve()
+        }
+    }
+
+    private func drawBar() {
+        let track = NSRect(x: 0, y: 2, width: bounds.width, height: max(4, bounds.height - 6))
+        let zones: [(from: Double, to: Double, color: NSColor)] = [(0, 50, .systemGreen), (50, 85, .systemOrange), (85, 100, .systemRed)]
+        for zone in zones {
+            let rect = NSRect(x: track.minX + track.width * CGFloat(zone.from / 100), y: track.minY,
+                              width: track.width * CGFloat((zone.to - zone.from) / 100), height: track.height)
+            zone.color.withAlphaComponent(used == nil ? 0.25 : 0.85).setFill()
+            rect.fill()
+        }
+        guard let used = used, used.isFinite else { return }
+        let x = track.minX + track.width * CGFloat(max(0, min(100, used)) / 100)
+        let arrow = NSBezierPath()
+        arrow.move(to: NSPoint(x: x - 4, y: bounds.height))
+        arrow.line(to: NSPoint(x: x + 4, y: bounds.height))
+        arrow.line(to: NSPoint(x: x, y: track.maxY))
+        NSColor.labelColor.setFill()
+        arrow.fill()
+    }
+
+    private func drawCurve() {
         NSColor.quaternaryLabelColor.withAlphaComponent(0.25).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
         let start = now - span
         func point(_ t: Double, _ value: Double) -> NSPoint {
-            NSPoint(x: bounds.width * CGFloat((t - start) / span), y: 3 + (bounds.height - 6) * CGFloat(value / 100))
+            NSPoint(x: bounds.width * CGFloat((t - start) / span),
+                    y: 3 + (bounds.height - 6) * CGFloat(max(0, min(100, value)) / 100))
         }
-        func draw(_ value: (ClaudeSample) -> Double?, _ color: NSColor) {
-            let visible = samples.filter { $0.t >= start && $0.t <= now + 60 }
-            let path = NSBezierPath()
-            path.lineWidth = 1.5
-            path.lineJoinStyle = .round
-            var previous: ClaudeSample?
-            for sample in visible {
-                guard let v = value(sample) else { previous = nil; continue }
-                let p = point(sample.t, v)
-                if let before = previous, sample.t - before.t <= 1800 { path.line(to: p) } else { path.move(to: p) }
-                previous = sample
-            }
-            color.setStroke()
-            path.stroke()
+        let path = NSBezierPath()
+        path.lineWidth = 1.5
+        path.lineJoinStyle = .round
+        var previous: UsageSample?
+        var points: [NSPoint] = []
+        for sample in samples where sample.t >= start && sample.t <= now + 60 {
+            guard let value = sample[keyPath: series] else { previous = nil; continue }
+            let p = point(sample.t, value)
+            points.append(p)
+            if let before = previous, sample.t - before.t <= 1800 { path.line(to: p) } else { path.move(to: p) }
+            previous = sample
         }
-        draw({ $0.five }, Palette.claude)
-        draw({ $0.week }, Palette.weekly)
+        tint.setStroke()
+        path.stroke()
+        // A single reading has no line yet, so each point also gets a dot.
+        tint.setFill()
+        for p in points {
+            NSBezierPath(ovalIn: NSRect(x: p.x - 1.8, y: p.y - 1.8, width: 3.6, height: 3.6)).fill()
+        }
+    }
+}
+
+/// Title, remaining value and a gauge. The gauge's mode is remembered per key across launches.
+final class GaugeRow: NSView {
+    let label = NSTextField(labelWithString: "")
+    let value = NSTextField(labelWithString: "—")
+    private let gauge = UsageGauge()
+    private let key: String
+    private var heightConstraint: NSLayoutConstraint!
+    var onChange: (() -> Void)?
+
+    init(_ title: String, key: String, tint: NSColor, series: KeyPath<UsageSample, Double?>) {
+        self.key = key
+        super.init(frame: .zero)
+        label.stringValue = title
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        value.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        value.alignment = .right
+        gauge.tint = tint
+        gauge.series = series
+        gauge.mode = GaugeRow.savedMode(key)
+        gauge.onToggle = { [weak self] in self?.toggle() }
+        gauge.setAccessibilityLabel(title)
+        let line = NSStackView(views: [label, NSView(), value])
+        line.orientation = .horizontal
+        let stack = NSStackView(views: [line, gauge])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        heightConstraint = gauge.heightAnchor.constraint(equalToConstant: 16)
+        heightConstraint.isActive = true
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            line.widthAnchor.constraint(equalTo: stack.widthAnchor), gauge.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+        applyHeight()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    var samples: [UsageSample] = [] {
+        didSet {
+            gauge.samples = samples
+            gauge.now = Date().timeIntervalSince1970
+        }
+    }
+
+    /// `remaining` is shown as text; the gauge shows the used share (100 - remaining).
+    func update(_ remaining: Double?, tooltip: String? = nil) {
+        if let remaining = remaining, remaining.isFinite {
+            let shown = max(0, min(100, remaining))
+            gauge.used = 100 - shown
+            value.stringValue = String(format: "%.0f %%", shown)
+            value.textColor = shown < 15 ? .systemOrange : .labelColor
+        } else {
+            gauge.used = nil
+            value.stringValue = "—"
+            value.textColor = .secondaryLabelColor
+        }
+        toolTip = tooltip
+    }
+
+    /// Alpha is used to show stale data.
+    var isStale: Bool = false { didSet { alphaValue = isStale ? 0.5 : 1 } }
+
+    static func savedMode(_ key: String) -> GaugeMode {
+        GaugeMode(rawValue: UserDefaults.standard.string(forKey: "gauge.\(key)") ?? "") ?? .bar
+    }
+
+    private func toggle() {
+        gauge.mode = gauge.mode == .bar ? .curve : .bar
+        UserDefaults.standard.set(gauge.mode.rawValue, forKey: "gauge.\(key)")
+        applyHeight()
+        onChange?()
+    }
+
+    private func applyHeight() {
+        heightConstraint.constant = gauge.mode == .bar ? 16 : 44
     }
 }
 
@@ -1488,6 +1654,17 @@ if CommandLine.arguments.count >= 5 && CommandLine.arguments[1] == "--claude-his
                                 planFile: URL(fileURLWithPath: args[2]), projects: URL(fileURLWithPath: args[3]))
     ClaudeHistory.record(snap, now: now)
     let items = ClaudeHistory.load().map { ["t": $0.t, "five": $0.five as Any, "week": $0.week as Any] as [String: Any] }
+    print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-history" {
+    // Test hook: record one Codex reading (account/rateLimits/read result in a file), then print stored samples.
+    let args = CommandLine.arguments
+    let now = Double(args[3]) ?? 0
+    let payload = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: args[2]))) as? [String: Any] ?? [:]
+    let data = CodexUsage.snapshot(payload, now: now)
+    CodexHistory.record(data, now: now)
+    let items = CodexHistory.load().map { ["t": $0.t, "five": $0.five as Any, "week": $0.week as Any] as [String: Any] }
     print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)
 }

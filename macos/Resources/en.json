@@ -57,6 +57,5 @@
   "Claude: údaj z %@": "Claude: reading from %@",
   "● Claude: aktivní": "● Claude: active",
   "○ Claude: neaktivní · poslední data před %@": "○ Claude: inactive · last data %@ ago",
-  "○ Claude: zatím žádná data": "○ Claude: no data yet",
-  "Využito · 5 h (oranžová) · týden (žlutá) · posledních 24 h": "Used · 5 h (orange) · week (yellow) · last 24 h"
+  "○ Claude: zatím žádná data": "○ Claude: no data yet"
 }
