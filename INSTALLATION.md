@@ -6,7 +6,9 @@
 - macOS 13 nebo novější
 - aktuální ChatGPT desktop aplikaci
 
-Python, Codex CLI, Homebrew, OpenAI API klíč ani Terminál nejsou k instalaci potřeba.
+Python, Homebrew, OpenAI API klíč ani Terminál nejsou k instalaci potřeba.
+
+Aplikace čte limity přes Codex, který je součástí ChatGPT desktop aplikace (nebo samostatné Codex CLI, pokud ji máte nainstalovanou). Musíte být přihlášeni ke stejnému účtu.
 
 ## Instalace
 

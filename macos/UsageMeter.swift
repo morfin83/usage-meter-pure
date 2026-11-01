@@ -659,22 +659,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func fetchUsage() {
         guard !isFetching else { return }
         isFetching = true
-        let script = Bundle.main.resourceURL!.appendingPathComponent("usage_meter.py")
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["python3", script.path, "--live", "--json"]
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
             var data: [String: Any]?
-            do {
-                try process.run()
-                DispatchQueue.main.async { self?.usageProcess = process }
-                let bytes = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                if process.terminationStatus == 0 { data = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] }
-            } catch { }
+            if let binary = CodexUsage.codexBinary(),
+               let payload = try? CodexUsage.read(binary: binary, onLaunch: { process in
+                   DispatchQueue.main.async { self?.usageProcess = process }
+               }) {
+                data = CodexUsage.snapshot(payload, now: Date().timeIntervalSince1970)
+            }
             let result = data
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -730,6 +722,245 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         formatter.dateFormat = "HH:mm"
         updated.stringValue = restricted ? L("Účet hlásí omezení čerpání") : LF("Limity %@ · Mac každé 2 s", formatter.string(from: lastUsage!))
         updated.textColor = restricted ? .systemOrange : .secondaryLabelColor
+    }
+}
+
+// MARK: - Codex account limits (read-only, native; no Python runtime)
+//
+// Talks JSON-RPC over stdio to the local Codex app-server and calls only
+// `account/rateLimits/read`. It never starts a thread or a turn, so it does not
+// spend model tokens. Output keys match the reference adapter `scripts/usage_meter.py`.
+
+enum CodexUsage {
+    static let defaultTimeout: TimeInterval = 12
+    static let extraSearchDirectories = ["/opt/homebrew/bin", "/usr/local/bin"]
+    static let chatGPTCandidates = [
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "/Applications/Codex.app/Contents/Resources/codex",
+    ]
+
+    /// A Finder-launched app gets a minimal PATH, so Homebrew and npm locations are added explicitly.
+    static func searchPath(environment: [String: String]) -> String {
+        var dirs = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        for dir in extraSearchDirectories where !dirs.contains(dir) { dirs.append(dir) }
+        return dirs.joined(separator: ":")
+    }
+
+    static func codexBinary(environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        let fm = FileManager.default
+        for dir in searchPath(environment: environment).split(separator: ":") {
+            let path = "\(dir)/codex"
+            if fm.isExecutableFile(atPath: path) { return path }
+        }
+        return chatGPTCandidates.first { fm.isExecutableFile(atPath: $0) }
+    }
+
+    static func finiteNumber(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let result = number.doubleValue
+        return result.isFinite ? result : nil
+    }
+
+    static func isBool(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
+    /// Whitelists display fields. Account IDs, tokens and reset credits are never copied.
+    static func snapshot(_ payload: [String: Any], now: Double) -> [String: Any] {
+        var buckets = payload["rateLimitsByLimitId"] as? [String: Any] ?? [:]
+        if buckets.isEmpty, let legacy = payload["rateLimits"] as? [String: Any] {
+            buckets = ["codex": legacy]
+        }
+        var result: [String: Any] = ["source": "Codex account limits", "observedAt": now]
+        var items: [[String: Any]] = []
+        for key in buckets.keys.sorted() {
+            guard let bucket = buckets[key] as? [String: Any] else { continue }
+            var item: [String: Any] = [
+                "id": key,
+                "spendControlReached": bucket["spendControlReached"] as? Bool == true,
+                "limitReached": isTruthy(bucket["rateLimitReachedType"]),
+            ]
+            if let credits = bucket["credits"] as? [String: Any], let balance = credits["balance"] {
+                let text = balance as? String ?? (isBool(balance) ? "" : (balance as? NSNumber)?.stringValue ?? "")
+                if let amount = Double(text), amount.isFinite, amount >= 0 { item["creditBalance"] = text }
+            }
+            var windows: [[String: Any]] = []
+            for slot in ["primary", "secondary"] {
+                guard let window = bucket[slot] as? [String: Any] else { continue }
+                var row: [String: Any] = ["slot": slot, "resetPending": false]
+                if let used = finiteNumber(window["usedPercent"]) {
+                    row["remainingPercent"] = max(0, min(100, 100 - used))
+                }
+                if let mins = finiteNumber(window["windowDurationMins"]), mins > 0 {
+                    row["windowDurationMins"] = mins
+                }
+                if let reset = finiteNumber(window["resetsAt"]), reset >= 0, reset <= 253402300799 {
+                    row["resetsAt"] = reset
+                    row["resetPending"] = reset <= now
+                }
+                windows.append(row)
+            }
+            item["windows"] = windows
+            items.append(item)
+        }
+        result["buckets"] = items
+        return result
+    }
+
+    static func isTruthy(_ value: Any?) -> Bool {
+        switch value {
+        case nil, is NSNull: return false
+        case let text as String: return !text.isEmpty
+        case let number as NSNumber: return number.doubleValue != 0
+        default: return true
+        }
+    }
+
+    /// Runs `codex app-server` for one read. Returns the raw `result` object of `account/rateLimits/read`.
+    static func read(binary: String,
+                     timeout: TimeInterval = defaultTimeout,
+                     environment: [String: String] = ProcessInfo.processInfo.environment,
+                     onLaunch: ((Process) -> Void)? = nil) throws -> [String: Any] {
+        signal(SIGPIPE, SIG_IGN)  // a closed pipe must surface as an error, not kill the app
+        let link = try AppServerLink(binary: binary, environment: environment)
+        onLaunch?(link.process)
+        defer { link.shutdown() }
+        let deadline = Date().addingTimeInterval(timeout)
+        try link.send(["id": 1, "method": "initialize", "params": ["clientInfo": [
+            "name": "usage_meter", "title": "Usage Meter", "version": "0.2.0"]]])
+        _ = try link.response(1, deadline: deadline)
+        try link.send(["method": "initialized", "params": [String: Any]()])
+        try link.send(["id": 2, "method": "account/rateLimits/read"])
+        return try link.response(2, deadline: deadline)
+    }
+}
+
+enum CodexUsageError: Error {
+    case unavailable(String)
+}
+
+/// One app-server child process with a thread-safe queue of decoded JSON messages.
+final class AppServerLink {
+    let process = Process()
+    private let input = Pipe()
+    private let output = Pipe()
+    private let condition = NSCondition()
+    private var messages: [[String: Any]] = []
+    private var buffer = Data()
+    private var closed = false
+
+    init(binary: String, environment: [String: String]) throws {
+        var env = environment
+        env["PATH"] = CodexUsage.searchPath(environment: environment)
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = ["app-server", "--stdio", "--disable", "hooks"]
+        process.environment = env
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { self?.finish() } else { self?.receive(chunk) }
+        }
+        do {
+            try process.run()
+        } catch {
+            throw CodexUsageError.unavailable("launch")
+        }
+    }
+
+    private func receive(_ chunk: Data) {
+        condition.lock()
+        defer { condition.unlock() }
+        buffer.append(chunk)
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let line = buffer[buffer.startIndex..<newline]
+            buffer.removeSubrange(buffer.startIndex...newline)
+            guard line.count <= 1_000_000,
+                  let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  messages.count < 128 else { continue }
+            messages.append(object)
+        }
+        condition.broadcast()
+    }
+
+    private func finish() {
+        condition.lock()
+        closed = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func send(_ message: [String: Any]) throws {
+        var data = try JSONSerialization.data(withJSONObject: message)
+        data.append(0x0A)
+        do {
+            try input.fileHandleForWriting.write(contentsOf: data)
+        } catch {
+            throw CodexUsageError.unavailable("write")
+        }
+    }
+
+    /// Returns the `result` of the response with `id`. Server-initiated requests get an error reply.
+    func response(_ id: Int, deadline: Date) throws -> [String: Any] {
+        while true {
+            condition.lock()
+            while messages.isEmpty && !closed {
+                if !condition.wait(until: deadline) { break }
+            }
+            guard let message = messages.first else {
+                let reason = closed ? "closed" : "timeout"
+                condition.unlock()
+                throw CodexUsageError.unavailable(reason)
+            }
+            messages.removeFirst()
+            condition.unlock()
+
+            if let requestID = message["id"], message["method"] != nil {
+                try send(["id": requestID, "error": ["code": -32601,
+                    "message": "Usage Meter supports read-only usage queries"]])
+                continue
+            }
+            guard message["method"] == nil, (message["id"] as? NSNumber)?.intValue == id else { continue }
+            if message["error"] != nil {
+                // Raw server errors can contain private details; they are never reported.
+                throw CodexUsageError.unavailable("server-error")
+            }
+            guard let result = message["result"] as? [String: Any] else {
+                throw CodexUsageError.unavailable("invalid-response")
+            }
+            return result
+        }
+    }
+
+    func shutdown() {
+        output.fileHandleForReading.readabilityHandler = nil
+        try? input.fileHandleForWriting.close()
+        if process.isRunning { process.terminate() }
+        let stop = Date().addingTimeInterval(2)
+        while process.isRunning && Date() < stop { usleep(20_000) }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        try? output.fileHandleForReading.close()
+    }
+}
+
+// Test hooks used by tests/test_native_adapter.py. They do not affect normal launch.
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--usage-find-codex" {
+    if let path = CodexUsage.codexBinary() { print(path); exit(0) }
+    exit(1)
+}
+if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--usage-check" {
+    let timeout = CommandLine.arguments.count >= 4 ? Double(CommandLine.arguments[3]) ?? CodexUsage.defaultTimeout : CodexUsage.defaultTimeout
+    do {
+        let payload = try CodexUsage.read(binary: CommandLine.arguments[2], timeout: timeout)
+        let data = CodexUsage.snapshot(payload, now: Date().timeIntervalSince1970)
+        print(String(data: try JSONSerialization.data(withJSONObject: data, options: [.sortedKeys]), encoding: .utf8)!)
+        exit(0)
+    } catch {
+        print("{\"status\":\"unavailable\"}")
+        exit(1)
     }
 }
 

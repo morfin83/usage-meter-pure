@@ -1,44 +1,42 @@
-# PURE
+# Usage Meter Pure
 
-This repository contains the Studio Pure Sound web and the Usage Meter Pure macOS application, together with their shared build and release workflow.
+A small native macOS menu-bar and desktop panel (Apple Silicon, macOS 13+) that shows the shared Codex account limits (5-hour and weekly windows, reset times) next to local CPU, per-core CPU, memory, GPU and network load.
 
-## Web
-
-- Production: <https://www.studiopuresound.cz/>
-- Hosting: Cloudflare Pages
-- Pages project: `studiopuresound`
-
-The static web source is in `web/src/`, public build inputs are in `web/public/`, and the generator is `web/build.py`. The generated `web/dist/` directory is deliberately not committed.
-
-```sh
-python3 web/build.py
-python3 -m unittest discover -s web/tests -v
-```
-
-## Usage Meter Pure
-
-- Current version: 0.6.1 RC2 (release candidate, not yet published)
-- Build: 9
-- Last published release: 0.6.0, build 8
 - Bundle identifier: `cz.pure.usagemeter`
+- Current version: 0.6.1 build 9 (release candidate, not yet published as a final release)
+- Last published release: 0.6.0 build 8 (see [RELEASES.md](RELEASES.md))
+- Languages: Czech and English
+- Licence: MIT ([LICENSE](LICENSE)); third-party notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-The application source is `macos/UsageMeter.swift`; its resources and build helpers are in `macos/Resources/` and `scripts/`.
+## How the limits are read
+
+The app asks the locally installed Codex app-server for account limits with a single read-only request, `account/rateLimits/read`. It starts no conversations and spends no model tokens. The request is made by the native Swift code in `macos/UsageMeter.swift`; no Python runtime is needed on the user's Mac.
+
+The limits are shared account limits, not the tokens of a single conversation. Credit balances are shown only when the account reports them.
+
+## Repository layout
+
+- `macos/UsageMeter.swift` — the application (AppKit, IOKit, SystemConfiguration), including the native limits reader.
+- `macos/Resources/` — application icon, Czech and English strings.
+- `scripts/build_macos.sh` — builds and ad-hoc signs the `.app` into a folder you choose.
+- `scripts/make_app_icon.sh` — regenerates the icon.
+- `scripts/usage_meter.py` — reference implementation of the limits reader, kept for tests. It is not part of the app bundle.
+- `tests/` — unit tests for the reader and for the compiled Swift adapter.
+- `docs/` — project documentation (status, architecture, backlog, decisions, release process).
+
+## Build and test
 
 ```sh
 python3 -m unittest discover -s tests -v
-sh scripts/build_macos.sh
+sh scripts/build_macos.sh /path/to/an/empty/output/folder
 ```
 
-`create_release.command` prepares the signed `.app` in the local release staging area. `create_release_dmg.command` packages the verified application as the standard drag-and-drop DMG. Release DMGs are not committed to Git; obtain the matching Git release asset or protected backup when reproducing a production web build.
-
-## Release
-
-Release history and integrity information live in [RELEASES.md](RELEASES.md). The 0.6.0 production release uses Usage Meter Pure build 8 and is deployed on Cloudflare Pages.
+The tests compile the Swift code with `xcrun swiftc`, so Command Line Tools are needed on the build machine only. End users need none of them.
 
 ## Privacy
 
-The web uses a minimal set of external mechanisms and currently has no marketing tracking. The production privacy page describes the active implementation.
+The app sends nothing over the network itself. It reads the account limits through the local Codex app-server. See [INSTALLATION.md](INSTALLATION.md) for installation and Gatekeeper notes.
 
-## Licence
+## Reporting bugs
 
-Usage Meter Pure is released under the MIT License. See [LICENSE](LICENSE). Third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Please use the [issue tracker](https://github.com/morfin83/usage-meter-pure/issues) and the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md).

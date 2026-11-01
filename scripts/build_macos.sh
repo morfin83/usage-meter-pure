@@ -11,7 +11,6 @@ xcrun swiftc -O -target arm64-apple-macos13.0 -module-cache-path "${TMPDIR:-/tmp
   -framework AppKit -framework IOKit -framework SystemConfiguration \
   "$PLUGIN_DIR/macos/UsageMeter.swift" -o "$APP_DIR/Contents/MacOS/UsageMeter"
 cp "$PLUGIN_DIR/macos/Resources/"* "$APP_DIR/Contents/Resources/"
-cp "$PLUGIN_DIR/scripts/usage_meter.py" "$APP_DIR/Contents/Resources/usage_meter.py"
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
