@@ -321,6 +321,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let claudeTokens = NSTextField(labelWithString: "")
     let claudeUpdated = NSTextField(labelWithString: L("Claude: načítání…"))
     let claudeSetupLabel = NSTextField(labelWithString: "")
+    let claudeLive = NSTextField(labelWithString: "")
+    let claudeChart = SparkLine()
+    let claudeLegend = NSTextField(labelWithString: L("Využito · 5 h (oranžová) · týden (žlutá) · posledních 24 h"))
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -451,6 +454,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             title.font = .systemFont(ofSize: 10, weight: .semibold)
             title.textColor = .secondaryLabelColor
         }
+        claudeLive.font = .systemFont(ofSize: 9, weight: .medium)
+        claudeLegend.font = .systemFont(ofSize: 9)
+        claudeLegend.textColor = .tertiaryLabelColor
+        claudeChart.heightAnchor.constraint(equalToConstant: 44).isActive = true
         for note in [claudeTokens, claudeUpdated, claudeSetupLabel] {
             note.font = .systemFont(ofSize: 9)
             note.textColor = .tertiaryLabelColor
@@ -469,7 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aiSwitch.setAccessibilityLabel(L("Zobrazit AI"))
         let aiHeader = NSStackView(views: [NSTextField(labelWithString: "AI"), NSView(), aiSwitch])
         aiHeader.orientation = .horizontal
-        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeChart, claudeLegend, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
            let source = CIImage(contentsOf: url) {
@@ -690,7 +697,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 data = CodexUsage.snapshot(payload, now: Date().timeIntervalSince1970)
             }
             let claude = ClaudeUsage.read()
-            DispatchQueue.main.async { self?.applyClaude(claude) }
+            ClaudeHistory.record(claude, now: Date().timeIntervalSince1970)
+            let history = ClaudeHistory.load()
+            DispatchQueue.main.async { self?.applyClaude(claude, history: history) }
             let result = data
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -707,8 +716,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func applyClaude(_ snap: ClaudeSnapshot) {
+    func applyClaude(_ snap: ClaudeSnapshot, history: [ClaudeSample]) {
         let now = Date().timeIntervalSince1970
+        claudeChart.samples = history
+        claudeChart.now = now
+        if let newest = history.last?.t {
+            let age = now - newest
+            if age <= 600 {
+                claudeLive.stringValue = L("● Claude: aktivní")
+                claudeLive.textColor = .systemGreen
+            } else {
+                claudeLive.stringValue = LF("○ Claude: neaktivní · poslední data před %@", ClaudeHistory.ageText(age))
+                claudeLive.textColor = .tertiaryLabelColor
+            }
+        } else {
+            claudeLive.stringValue = L("○ Claude: zatím žádná data")
+            claudeLive.textColor = .tertiaryLabelColor
+        }
         let age = snap.planObservedAt.map { now - $0 }
         let stale = age.map { $0 > ClaudeUsage.staleAfter } ?? true
         let formatter = DateFormatter()
@@ -1147,6 +1171,76 @@ if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--usage-chec
     }
 }
 
+// MARK: - Claude history (samples kept locally for 7 days, drawn as curves for the last 24 hours)
+
+struct ClaudeSample: Codable {
+    let t: Double
+    let five: Double?
+    let week: Double?
+}
+
+enum ClaudeHistory {
+    static let keepSeconds: Double = 7 * 24 * 3600
+    static let maxSamples = 4000
+    static var file: URL { AppSupport.directory.appendingPathComponent("claude-history.json") }
+
+    /// Stores a sample only when the source reports a new observation time.
+    static func record(_ snap: ClaudeSnapshot, now: Double) {
+        guard let observed = snap.planObservedAt else { return }
+        var items = load()
+        guard items.last.map({ $0.t != observed }) ?? true else { return }
+        items.append(ClaudeSample(t: observed, five: snap.fiveHourUsed, week: snap.weekUsed))
+        items = items.filter { now - $0.t <= keepSeconds }
+        if items.count > maxSamples { items.removeFirst(items.count - maxSamples) }
+        if let data = try? JSONEncoder().encode(items) { try? AppSupport.writeAtomically(data, to: file) }
+    }
+
+    static func load() -> [ClaudeSample] {
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        return ((try? JSONDecoder().decode([ClaudeSample].self, from: data)) ?? []).sorted { $0.t < $1.t }
+    }
+
+    static func ageText(_ seconds: Double) -> String {
+        let minutes = Int(seconds / 60)
+        if minutes < 60 { return "\(minutes) min" }
+        if minutes < 24 * 60 { return "\(minutes / 60) h" }
+        return "\(minutes / 1440) d"
+    }
+}
+
+/// Two curves (5 h and week, used %) over the last 24 hours. Gaps longer than 30 minutes are not joined.
+final class SparkLine: NSView {
+    var samples: [ClaudeSample] = [] { didSet { needsDisplay = true } }
+    var now: Double = Date().timeIntervalSince1970 { didSet { needsDisplay = true } }
+    private let span: Double = 24 * 3600
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.quaternaryLabelColor.withAlphaComponent(0.25).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
+        let start = now - span
+        func point(_ t: Double, _ value: Double) -> NSPoint {
+            NSPoint(x: bounds.width * CGFloat((t - start) / span), y: 3 + (bounds.height - 6) * CGFloat(value / 100))
+        }
+        func draw(_ value: (ClaudeSample) -> Double?, _ color: NSColor) {
+            let visible = samples.filter { $0.t >= start && $0.t <= now + 60 }
+            let path = NSBezierPath()
+            path.lineWidth = 1.5
+            path.lineJoinStyle = .round
+            var previous: ClaudeSample?
+            for sample in visible {
+                guard let v = value(sample) else { previous = nil; continue }
+                let p = point(sample.t, v)
+                if let before = previous, sample.t - before.t <= 1800 { path.line(to: p) } else { path.move(to: p) }
+                previous = sample
+            }
+            color.setStroke()
+            path.stroke()
+        }
+        draw({ $0.five }, Palette.claude)
+        draw({ $0.week }, Palette.weekly)
+    }
+}
+
 // MARK: - Claude Code status line (official hook; no cookies, no tokens, no network)
 //
 // Claude Code runs `statusLine.command` after each assistant message and passes session JSON on stdin.
@@ -1385,6 +1479,17 @@ enum ClaudeSetup {
 if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--statusline" {
     let input = FileHandle.standardInput.readDataToEndOfFile()
     exit(ClaudeStatusline.run(stdin: input))
+}
+if CommandLine.arguments.count >= 5 && CommandLine.arguments[1] == "--claude-history" {
+    // Test hook: record one reading from the given sources, then print the stored samples.
+    let args = CommandLine.arguments
+    let now = Double(args[4]) ?? 0
+    let snap = ClaudeUsage.read(now: Date(timeIntervalSince1970: now),
+                                planFile: URL(fileURLWithPath: args[2]), projects: URL(fileURLWithPath: args[3]))
+    ClaudeHistory.record(snap, now: now)
+    let items = ClaudeHistory.load().map { ["t": $0.t, "five": $0.five as Any, "week": $0.week as Any] as [String: Any] }
+    print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
 }
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--claude-setup" {
     let state: ClaudeSetupState = CommandLine.arguments[2] == "uninstall" ? ClaudeSetup.uninstall()

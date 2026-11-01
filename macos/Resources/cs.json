@@ -54,5 +54,9 @@
   "Tokeny z Claude Code: žádné místní záznamy": "Tokeny z Claude Code: žádné místní záznamy",
   "Claude: údaj není dostupný": "Claude: údaj není dostupný",
   "Claude: starší údaj (%@ min)": "Claude: starší údaj (%@ min)",
-  "Claude: údaj z %@": "Claude: údaj z %@"
+  "Claude: údaj z %@": "Claude: údaj z %@",
+  "● Claude: aktivní": "● Claude: aktivní",
+  "○ Claude: neaktivní · poslední data před %@": "○ Claude: neaktivní · poslední data před %@",
+  "○ Claude: zatím žádná data": "○ Claude: zatím žádná data",
+  "Využito · 5 h (oranžová) · týden (žlutá) · posledních 24 h": "Využito · 5 h (oranžová) · týden (žlutá) · posledních 24 h"
 }
