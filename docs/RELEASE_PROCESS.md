@@ -3,7 +3,7 @@
 Each step needs the owner's approval where marked. Nothing here publishes anything by itself.
 
 1. **Branch and tests.** Work on a branch. `python3 -m unittest discover -s tests -v` must pass.
-2. **Version.** Change `CFBundleShortVersionString` and `CFBundleVersion` in `scripts/build_macos.sh` (0.6.1 build 11 for this release); keep them equal to the version in `README.md`, `RELEASES.md` and `INSTALLATION.md`.
+2. **Version.** Change `CFBundleShortVersionString` and `CFBundleVersion` in `scripts/build_macos.sh` (0.6.1 build 12 for the current release candidate); keep them equal to the version in `README.md`, `RELEASES.md` and `INSTALLATION.md`.
 3. **Build.** `sh scripts/build_macos.sh <empty folder outside the repo>`. The script deletes the target folder first.
 4. **Verify.** `codesign --verify --deep --strict`, `plutil -p` on `Info.plist`, `lipo -archs`, `--usage-check` against a real Codex install (read-only).
 5. **DMG.** `sh scripts/make_dmg.sh <App.app> <empty output folder> <name>` builds the drag-and-drop DMG with an Applications link and writes a `.sha256` file. It refuses to overwrite. Never commit the DMG.

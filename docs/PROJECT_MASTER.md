@@ -6,7 +6,7 @@ Stav k 2026-11-01. Autoritativní zdroj: kód v tomto repozitáři a rozhodnutí
 Nativní panel pro macOS (Apple Silicon, macOS 13+). Ukazuje limity Codexu a Claude a lokální CPU, jádra, paměť, GPU a síť. Licence MIT. Studio Pure Sound / MORfin83.
 
 ## Stav
-- Verze 0.6.1 build 11 je sestavená a otestovaná lokálně. Vydání čeká na schválení vlastníka.
+- Verze 0.6.1 build 12 (barové ukazatele, křivky, automatické napojení Claude Code) je sloučená do `main`, nainstalovaná lokálně z DMG. Vydání čeká na schválení vlastníka.
 - Naposledy vydáno: 0.6.0 build 8. Pre-release: 0.6.1 RC3 build 10 (viz [RELEASES.md](../RELEASES.md)).
 - Pracovní větev: `release/0.6.1`.
 
