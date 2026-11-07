@@ -25,3 +25,8 @@ Stavy: DONE = hotovo a kryto kontrolou v repozitáři; PARTIAL = hotovo, ne zcel
 | Čistá instalace na macOS 13+ | PLANNED | NEOVĚŘENO |
 | Developer ID a notarizace | DEFERRED | jen ad-hoc (rozhodnutí vlastníka) |
 | Účtování tokenů jedné konverzace | REJECTED | aplikace ukazuje limity účtu |
+| Okno „Codex · aktivita": stav (běží, dokončeno, přerušeno, nečinný), posledních 12 kroků, ikony | DONE | `test_codex_activity.py`; ruční ověření |
+| Odpočet „Obnova za …" u každého limitu Codex i Claude | DONE | ruční ověření |
+| Proklik „Otevřít v Codexu" a „Otevřít v Terminálu" (`codex resume <id>`) | PARTIAL | Terminál vyžaduje oprávnění k ovládání Terminálu; ověřeno bez AppleScriptu |
+| Tokeny Codex z lokálních logů (5 h, 7 dní) | DONE | `test_codex_tokens.py`; shoda s nezávislým výpočtem |
+

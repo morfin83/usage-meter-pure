@@ -47,7 +47,7 @@ class CodexActivityTests(unittest.TestCase):
         ])
         self.assertEqual(data["id"], UUID)
         self.assertEqual(data["state"], "running")
-        self.assertIn("exec: swift build", data["steps"][-1]["text"])
+        self.assertIn("spouští kód: swift build", data["steps"][-1]["text"])
 
     def test_finished_task_marks_steps_done(self):
         data = self.session([
@@ -86,6 +86,16 @@ class CodexActivityTests(unittest.TestCase):
         texts = [step["text"] for step in data["steps"]]
         self.assertFalse(any(t.startswith("Message Type:") for t in texts))
         self.assertIn("Hotovo, opravil jsem chybu.", texts)
+
+    def test_raw_code_of_exec_is_not_shown(self):
+        data = self.session([
+            line(NOW - 60, "event_msg", {"type": "task_started"}),
+            line(NOW - 50, "response_item", {"type": "custom_tool_call", "name": "exec",
+                                             "input": "const x = await tools.web__run({open: []});", "call_id": "c2"}),
+        ])
+        text = data["steps"][-1]["text"]
+        self.assertEqual(text, "spouští kód")
+        self.assertNotIn("tools.", text)
 
     def test_no_sessions_gives_no_activity(self):
         result = subprocess.run([build._build["binary"], "--codex-activity", str(self.root), str(NOW)],

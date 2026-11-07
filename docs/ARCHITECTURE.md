@@ -53,3 +53,11 @@ Při každém spuštění aplikace zajistí položku `statusLine` v `~/.claude/s
 
 ## Sestavení
 `scripts/build_macos.sh` kompiluje přes `xcrun swiftc -target arm64-apple-macos13.0`, zkopíruje zdroje, zapíše `Info.plist`, vyčistí rozšířené atributy a podepíše ad-hoc. `scripts/make_dmg.sh` vytvoří DMG.
+
+## Codex activity (feat/codex-activity)
+- `CodexActivity.latest` reads the tail (256 KB) of the newest `~/.codex/sessions/**/*.jsonl` file of the last 24 h.
+- Events used: `task_started`, `task_complete`, `turn_aborted`, `function_call` / `custom_tool_call` and their outputs, `agent_message`. A call with no output after 20 s is shown as waiting (an estimate).
+- `CodexActivityWindow` refreshes every 2 s while open. The session id is the UUID at the end of the file name.
+- `CodexTokens.cachedTotals` sums `last_token_usage.total_tokens` across the logs, cached for five minutes; it runs after the limits are shown.
+- Test hooks: `--codex-activity <root> <now>`, `--codex-tokens <root> <now>`.
+

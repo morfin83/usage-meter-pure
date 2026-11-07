@@ -316,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let creditLabel = NSTextField(labelWithString: L("Kredity: API neposkytuje zůstatek"))
     let codexTokensLabel = NSTextField(labelWithString: L("Tokeny z Codex logů: načítání…"))
     let codexTitle = NSTextField(labelWithString: "Codex")
-    let codexActivityButton = NSButton(title: "", target: nil, action: nil)
+    let codexActivityButton = ClickableLabel(labelWithString: "")
     lazy var codexActivity = CodexActivityWindow()
     let claudeTitle = NSTextField(labelWithString: "Claude")
     let claudeFive = GaugeRow(L("Claude · zbývá 5 h"), key: "claude.5h", tint: Palette.claude, series: \.five)
@@ -480,11 +480,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             note.lineBreakMode = .byWordWrapping
             note.preferredMaxLayoutWidth = 260
         }
-        codexActivityButton.title = L("Aktivita ▸")
-        codexActivityButton.bezelStyle = .inline
-        codexActivityButton.font = .systemFont(ofSize: 10)
-        codexActivityButton.target = self
-        codexActivityButton.action = #selector(toggleCodexActivity)
+        codexActivityButton.stringValue = L("Aktivita ▸")
+        codexActivityButton.font = .systemFont(ofSize: 10, weight: .medium)
+        codexActivityButton.textColor = .controlAccentColor
+        codexActivityButton.onClick = { [weak self] in self?.codexActivity.show() }
         let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
         codexHeader.orientation = .horizontal
         aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
@@ -619,8 +618,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if positioned && !resizing { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: "panelOrigin") }
     }
     @objc func openWebsite() { NSWorkspace.shared.open(URL(string: "https://www.studiopuresound.cz")!) }
-    @objc func toggleCodexActivity() { codexActivity.show() }
-
     @objc func toggleAI() { aiBody.isHidden = aiSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleShow() { body.isHidden = showSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleDetails() { details.isHidden = detailSwitch.state == .off; saveSwitches(); resize() }
@@ -719,7 +716,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 CodexHistory.record(data, now: Date().timeIntervalSince1970)
                 codexHistory = CodexHistory.load()
             }
-            let codexTokens = CodexTokens.cachedTotals(now: Date().timeIntervalSince1970)
             let result = data
             let codexSamples = codexHistory
             DispatchQueue.main.async {
@@ -732,8 +728,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.updated.textColor = .systemOrange
                     return
                 }
-                self.applyUsage(data, history: codexSamples, tokens: codexTokens)
+                self.applyUsage(data, history: codexSamples)
             }
+            // The log scan can take a few seconds, so it runs after the limits are already on screen.
+            let codexTokens = CodexTokens.cachedTotals(now: Date().timeIntervalSince1970)
+            DispatchQueue.main.async { self?.applyCodexTokens(codexTokens) }
         }
     }
 
@@ -793,12 +792,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func applyUsage(_ data: [String: Any], history: [UsageSample], tokens: CodexTokens.Totals?) {
+    func applyCodexTokens(_ tokens: CodexTokens.Totals?) {
         if let tokens = tokens {
             codexTokensLabel.stringValue = LF("Tokeny z Codex logů: 5 h %@ · 7 dní %@", ClaudeUsage.compact(tokens.fiveHour), ClaudeUsage.compact(tokens.week))
         } else {
             codexTokensLabel.stringValue = L("Tokeny z Codex logů: žádné záznamy")
         }
+    }
+
+    func applyUsage(_ data: [String: Any], history: [UsageSample]) {
         quota.samples = history
         weekly.samples = history
         let buckets = data["buckets"] as? [[String: Any]] ?? []
@@ -1144,7 +1146,7 @@ enum CodexActivity {
                 let name = payload["name"] as? String ?? "nástroj"
                 let detail = short(commandText(payload["arguments"] ?? payload["input"]))
                 if let callID = payload["call_id"] as? String { pending[callID] = steps.count }
-                steps.append(Step(time: time, kind: .running, text: detail.isEmpty ? name : "\(name): \(detail)"))
+                steps.append(Step(time: time, kind: .running, text: label(name: name, detail: detail)))
             case ("response_item", "function_call_output"), ("response_item", "custom_tool_call_output"):
                 if let callID = payload["call_id"] as? String, let index = pending[callID] {
                     steps[index] = Step(time: steps[index].time, kind: .done, text: steps[index].text)
@@ -1172,12 +1174,19 @@ enum CodexActivity {
         return Session(id: id, state: state, updated: modified, steps: Array(steps.suffix(12)))
     }
 
+    /// A readable name for a tool call. Raw code of the `exec` tool is not shown.
+    static func label(name: String, detail: String) -> String {
+        let names = ["exec": "spouští kód", "apply_patch": "upravuje soubory", "send_message": "posílá zprávu"]
+        let title = names[name] ?? name
+        return detail.isEmpty ? title : "\(title): \(detail)"
+    }
+
     static func commandText(_ value: Any?) -> String {
         if let text = value as? String {
             if let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 return commandText(object)
             }
-            return text
+            return ""   // free-form code or input is not shown
         }
         if let object = value as? [String: Any] {
             return (object["cmd"] as? String) ?? (object["command"] as? String) ?? (object["path"] as? String) ?? ""
@@ -1189,6 +1198,13 @@ enum CodexActivity {
         let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
         return oneLine.count > 90 ? String(oneLine.prefix(90)) + "…" : oneLine
     }
+}
+
+/// A text label that reacts to a click. Works in the non-activating panel, where buttons may need a first click to activate.
+final class ClickableLabel: NSTextField {
+    var onClick: (() -> Void)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
 /// Panel with what Codex is doing right now, updated every two seconds while it is open.
