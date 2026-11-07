@@ -57,5 +57,20 @@
   "Claude: údaj z %@": "Claude: údaj z %@",
   "● Claude: aktivní": "● Claude: aktivní",
   "○ Claude: neaktivní · poslední data před %@": "○ Claude: neaktivní · poslední data před %@",
-  "○ Claude: zatím žádná data": "○ Claude: zatím žádná data"
+  "○ Claude: zatím žádná data": "○ Claude: zatím žádná data",
+  "Aktivita ▸": "Aktivita ▸",
+  "Codex · aktivita": "Codex · aktivita",
+  "Obnova za %@": "Obnova za %@",
+  "%@ min": "%@ min",
+  "%@ h %@ min": "%@ h %@ min",
+  "%@ d %@ h": "%@ d %@ h",
+  "Codex: zatím žádná aktivita": "Codex: zatím žádná aktivita",
+  "● Běží": "● Běží",
+  "✓ Dokončeno": "✓ Dokončeno",
+  "✖ Přerušeno": "✖ Přerušeno",
+  "○ Nečinný": "○ Nečinný",
+  "Otevřít v Codexu": "Otevřít v Codexu",
+  "Otevřít v Terminálu": "Otevřít v Terminálu",
+  "Aplikace Codex nebyla nalezena.": "Aplikace Codex nebyla nalezena.",
+  "Příkaz je zkopírován: vložte ho do Terminálu.": "Příkaz je zkopírován: vložte ho do Terminálu."
 }

@@ -315,6 +315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let updated = NSTextField(labelWithString: L("Limity: načítání…"))
     let creditLabel = NSTextField(labelWithString: L("Tokeny: API neposkytuje"))
     let codexTitle = NSTextField(labelWithString: "Codex")
+    let codexActivityButton = NSButton(title: "", target: nil, action: nil)
+    lazy var codexActivity = CodexActivityWindow()
     let claudeTitle = NSTextField(labelWithString: "Claude")
     let claudeFive = GaugeRow(L("Claude · zbývá 5 h"), key: "claude.5h", tint: Palette.claude, series: \.five)
     let claudeWeek = GaugeRow(L("Claude · zbývá týden"), key: "claude.week", tint: Palette.claude, series: \.week)
@@ -471,7 +473,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aiSwitch.setAccessibilityLabel(L("Zobrazit AI"))
         let aiHeader = NSStackView(views: [NSTextField(labelWithString: "AI"), NSView(), aiSwitch])
         aiHeader.orientation = .horizontal
-        aiBody = vertical([codexTitle, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        codexActivityButton.title = L("Aktivita ▸")
+        codexActivityButton.bezelStyle = .inline
+        codexActivityButton.font = .systemFont(ofSize: 10)
+        codexActivityButton.target = self
+        codexActivityButton.action = #selector(toggleCodexActivity)
+        let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
+        codexHeader.orientation = .horizontal
+        aiBody = vertical([codexHeader, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
         for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
@@ -603,6 +612,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if positioned && !resizing { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: "panelOrigin") }
     }
     @objc func openWebsite() { NSWorkspace.shared.open(URL(string: "https://www.studiopuresound.cz")!) }
+    @objc func toggleCodexActivity() { codexActivity.show() }
+
     @objc func toggleAI() { aiBody.isHidden = aiSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleShow() { body.isHidden = showSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleDetails() { details.isHidden = detailSwitch.state == .off; saveSwitches(); resize() }
@@ -743,6 +754,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let epoch = epoch else { return L("Čas resetu není v lokálním zdroji Claude.") }
             return LF("Obnova: %@", formatter.string(from: Date(timeIntervalSince1970: epoch)))
         }
+        claudeFive.setReset(snap.fiveHourResetsAt)
+        claudeWeek.setReset(snap.weekResetsAt)
         claudeFive.update(snap.fiveHourUsed.map { 100 - $0 }, tooltip: resetText(snap.fiveHourResetsAt))
         claudeWeek.update(snap.weekUsed.map { 100 - $0 }, tooltip: resetText(snap.weekResetsAt))
         claudeFive.isStale = stale
@@ -782,6 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let windows = bucket["windows"] as? [[String: Any]] ?? []
         for (slot, row) in [("primary", quota), ("secondary", weekly)] {
             let window = windows.first { $0["slot"] as? String == slot }
+            row.setReset(window?["resetsAt"] as? Double)
             let mins = window?["windowDurationMins"] as? Double
             let label: String
             if let mins = mins {
@@ -1030,6 +1044,273 @@ enum ClaudeUsage {
 
     static func compact(_ count: Int) -> String {
         count >= 1_000_000 ? String(format: "%.1f M", Double(count) / 1e6) : String(format: "%.0f k", Double(count) / 1e3)
+    }
+}
+
+/// What Codex is doing right now, read from the newest session log (`~/.codex/sessions`). Local only, no network.
+enum CodexActivity {
+    enum Kind: String {
+        case running, done, waiting, error, info
+    }
+
+    struct Step {
+        let time: Double
+        let kind: Kind
+        let text: String
+    }
+
+    struct Session {
+        let id: String
+        let state: String          // "running", "done", "aborted", "idle"
+        let updated: Double
+        let steps: [Step]
+    }
+
+    static var sessions: URL {
+        if let override = ProcessInfo.processInfo.environment["USAGE_METER_TEST_CODEX"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions", isDirectory: true)
+    }
+
+    /// Reads the newest log of the last day. Only the tail of the file is parsed, so this stays cheap every two seconds.
+    static func latest(root: URL = sessions, now: Double) -> Session? {
+        guard let walker = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return nil }
+        var newest: (url: URL, modified: Double)?
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            if now - modified > 24 * 3600 { continue }
+            if newest == nil || modified > newest!.modified { newest = (url, modified) }
+        }
+        guard let file = newest, let handle = try? FileHandle(forReadingFrom: file.url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let window: UInt64 = 256 * 1024
+        let start = size > window ? size - window : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd() else { return nil }
+        var lines = data.split(separator: 0x0A)
+        if start > 0, !lines.isEmpty { lines.removeFirst() }   // the first line may be cut in the middle
+        return parse(lines: lines, id: sessionID(file.url), modified: file.modified, now: now)
+    }
+
+    /// The session id is the UUID at the end of `rollout-<time>-<uuid>.jsonl`.
+    static func sessionID(_ url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        return stem.count >= 36 ? String(stem.suffix(36)) : stem
+    }
+
+    static func parse(lines: [Data.SubSequence], id: String, modified: Double, now: Double) -> Session {
+        var steps: [Step] = []
+        var pending: [String: Int] = [:]            // call id -> index of its running step
+        var lastStarted: Double?, lastFinished: Double?, aborted = false
+        for line in lines {
+            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            let time = ClaudeUsage.parseTime(object["timestamp"] as? String ?? "") ?? modified
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            let kind = object["type"] as? String ?? ""
+            let type = payload["type"] as? String ?? ""
+            switch (kind, type) {
+            case ("event_msg", "task_started"):
+                lastStarted = time
+                steps.append(Step(time: time, kind: .running, text: "Zadání úlohy"))
+            case ("event_msg", "task_complete"):
+                lastFinished = time
+                steps.append(Step(time: time, kind: .done, text: "Úloha dokončena"))
+            case ("event_msg", "turn_aborted"):
+                lastFinished = time
+                aborted = true
+                steps.append(Step(time: time, kind: .error, text: "Přerušeno"))
+            case ("event_msg", let t) where t.lowercased().contains("error"):
+                steps.append(Step(time: time, kind: .error, text: short(payload["message"] as? String ?? t)))
+            case ("response_item", "function_call"), ("response_item", "custom_tool_call"):
+                let name = payload["name"] as? String ?? "nástroj"
+                let detail = short(commandText(payload["arguments"] ?? payload["input"]))
+                if let callID = payload["call_id"] as? String { pending[callID] = steps.count }
+                steps.append(Step(time: time, kind: .running, text: detail.isEmpty ? name : "\(name): \(detail)"))
+            case ("response_item", "function_call_output"), ("response_item", "custom_tool_call_output"):
+                if let callID = payload["call_id"] as? String, let index = pending[callID] {
+                    steps[index] = Step(time: steps[index].time, kind: .done, text: steps[index].text)
+                    pending[callID] = nil
+                }
+            case ("response_item", "agent_message"), ("response_item", "message"):
+                if (payload["role"] as? String) == "user" { continue }
+                let text = (payload["content"] as? [[String: Any]])?.compactMap { $0["text"] as? String }.joined(separator: " ")
+                    ?? payload["message"] as? String ?? ""
+                // Messages between Codex agents are internal bookkeeping, not what the user sees.
+                if !text.isEmpty, !text.hasPrefix("Message Type:") { steps.append(Step(time: time, kind: .info, text: short(text))) }
+            default:
+                break
+            }
+        }
+        // Calls still without output: waiting for a result (possibly an approval). This is an estimate.
+        for (_, index) in pending where now - steps[index].time > 20 {
+            steps[index] = Step(time: steps[index].time, kind: .waiting, text: steps[index].text)
+        }
+        let state: String
+        if aborted, (lastFinished ?? 0) >= (lastStarted ?? 0) { state = "aborted" }
+        else if let started = lastStarted, (lastFinished ?? 0) < started { state = now - modified < 120 ? "running" : "idle" }
+        else if lastFinished != nil { state = "done" }
+        else { state = "idle" }
+        return Session(id: id, state: state, updated: modified, steps: Array(steps.suffix(12)))
+    }
+
+    static func commandText(_ value: Any?) -> String {
+        if let text = value as? String {
+            if let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                return commandText(object)
+            }
+            return text
+        }
+        if let object = value as? [String: Any] {
+            return (object["cmd"] as? String) ?? (object["command"] as? String) ?? (object["path"] as? String) ?? ""
+        }
+        return ""
+    }
+
+    static func short(_ text: String) -> String {
+        let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+        return oneLine.count > 90 ? String(oneLine.prefix(90)) + "…" : oneLine
+    }
+}
+
+/// Panel with what Codex is doing right now, updated every two seconds while it is open.
+final class CodexActivityWindow: NSObject {
+    private let panel: NSPanel
+    private let stateLabel = NSTextField(labelWithString: "")
+    private let idLabel = NSTextField(labelWithString: "")
+    private let steps = NSStackView()
+    private var timer: Timer?
+    private var sessionID = ""
+    private let openApp = NSButton(title: "", target: nil, action: nil)
+    private let openTerminal = NSButton(title: "", target: nil, action: nil)
+
+    override init() {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 360),
+                        styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
+        super.init()
+        panel.title = L("Codex · aktivita")
+        panel.isReleasedWhenClosed = false
+        panel.level = .floating
+        let root = NSView()
+        panel.contentView = root
+        stateLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        idLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        idLabel.textColor = .secondaryLabelColor
+        steps.orientation = .vertical
+        steps.alignment = .leading
+        steps.spacing = 4
+        openApp.title = L("Otevřít v Codexu")
+        openApp.bezelStyle = .rounded
+        openApp.target = self
+        openApp.action = #selector(openInCodex)
+        openTerminal.title = L("Otevřít v Terminálu")
+        openTerminal.bezelStyle = .rounded
+        openTerminal.target = self
+        openTerminal.action = #selector(openInTerminal)
+        let buttons = NSStackView(views: [openApp, openTerminal])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+        let stack = NSStackView(views: [stateLabel, idLabel, steps, NSView(), buttons])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: root.topAnchor), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            steps.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28)
+        ])
+        panel.setContentSize(NSSize(width: 380, height: 360))
+    }
+
+    func show() {
+        refresh()
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    func refresh() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let session = CodexActivity.latest(now: Date().timeIntervalSince1970)
+            DispatchQueue.main.async { self?.apply(session) }
+        }
+    }
+
+    private func apply(_ session: CodexActivity.Session?) {
+        guard let session = session else {
+            stateLabel.stringValue = L("Codex: zatím žádná aktivita")
+            idLabel.stringValue = ""
+            sessionID = ""
+            steps.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            openTerminal.isEnabled = false
+            return
+        }
+        sessionID = session.id
+        openTerminal.isEnabled = true
+        stateLabel.stringValue = [
+            "running": L("● Běží"), "done": L("✓ Dokončeno"),
+            "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")
+        ][session.state] ?? session.state
+        stateLabel.textColor = session.state == "aborted" ? .systemRed : session.state == "running" ? .systemGreen : .labelColor
+        idLabel.stringValue = session.id
+        steps.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for step in session.steps {
+            let line = NSTextField(labelWithString: "")
+            line.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            line.lineBreakMode = .byTruncatingTail
+            line.maximumNumberOfLines = 2
+            line.preferredMaxLayoutWidth = 320
+            line.attributedStringValue = NSAttributedString(string: "\(icon(step.kind))  \(step.text)", attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: color(step.kind)])
+            steps.addArrangedSubview(line)
+        }
+    }
+
+    private func icon(_ kind: CodexActivity.Kind) -> String {
+        switch kind {
+        case .running: return "●"
+        case .waiting: return "◐"
+        case .error: return "✖"
+        case .done: return "✓"
+        case .info: return "•"
+        }
+    }
+
+    private func color(_ kind: CodexActivity.Kind) -> NSColor {
+        switch kind {
+        case .running: return .systemGreen
+        case .waiting: return .systemYellow
+        case .error: return .systemRed
+        case .done: return .tertiaryLabelColor
+        case .info: return .labelColor
+        }
+    }
+
+    @objc private func openInCodex() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") else {
+            stateLabel.stringValue = L("Aplikace Codex nebyla nalezena.")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+    }
+
+    /// Opens Terminal and runs `codex resume <id>`. The command is also copied, so it can be pasted if Terminal refuses.
+    @objc private func openInTerminal() {
+        guard !sessionID.isEmpty else { return }
+        let command = "codex resume \(sessionID)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        let script = NSAppleScript(source: "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell")
+        var error: NSDictionary?
+        script?.executeAndReturnError(&error)
+        if error != nil { stateLabel.stringValue = L("Příkaz je zkopírován: vložte ho do Terminálu.") }
     }
 }
 
@@ -1324,11 +1605,20 @@ final class UsageGauge: NSView {
     }
 }
 
+/// "45 min", "2 h 15 min", "3 d 4 h" for a remaining time in seconds.
+func durationText(_ seconds: Double) -> String {
+    let minutes = Int(seconds / 60)
+    if minutes < 60 { return LF("%@ min", String(minutes)) }
+    if minutes < 24 * 60 { return LF("%@ h %@ min", String(minutes / 60), String(minutes % 60)) }
+    return LF("%@ d %@ h", String(minutes / 1440), String((minutes % 1440) / 60))
+}
+
 /// Title, remaining value and a gauge. The gauge's mode is remembered per key across launches.
 final class GaugeRow: NSView {
     let label = NSTextField(labelWithString: "")
     let value = NSTextField(labelWithString: "—")
     private let gauge = UsageGauge()
+    private let resetLabel = NSTextField(labelWithString: "")
     private let key: String
     private var heightConstraint: NSLayoutConstraint!
     var onChange: (() -> Void)?
@@ -1348,10 +1638,12 @@ final class GaugeRow: NSView {
         gauge.setAccessibilityLabel(title)
         let line = NSStackView(views: [label, NSView(), value])
         line.orientation = .horizontal
-        let stack = NSStackView(views: [line, gauge])
+        resetLabel.font = .systemFont(ofSize: 9)
+        resetLabel.textColor = .tertiaryLabelColor
+        let stack = NSStackView(views: [line, gauge, resetLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 5
+        stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         heightConstraint = gauge.heightAnchor.constraint(equalToConstant: 16)
@@ -1386,6 +1678,13 @@ final class GaugeRow: NSView {
             value.textColor = .secondaryLabelColor
         }
         toolTip = tooltip
+    }
+
+    /// Shows how long until the window resets, e.g. "Obnova za 2 h 15 min".
+    func setReset(_ resetsAt: Double?) {
+        guard let resetsAt = resetsAt else { resetLabel.stringValue = ""; return }
+        let remaining = resetsAt - Date().timeIntervalSince1970
+        resetLabel.stringValue = remaining > 0 ? LF("Obnova za %@", durationText(remaining)) : ""
     }
 
     /// Alpha is used to show stale data.
@@ -1666,6 +1965,18 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-hist
     CodexHistory.record(data, now: now)
     let items = CodexHistory.load().map { ["t": $0.t, "five": $0.five as Any, "week": $0.week as Any] as [String: Any] }
     print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-activity" {
+    let args = CommandLine.arguments
+    let now = Double(args[3]) ?? 0
+    var out: [String: Any] = [:]
+    if let session = CodexActivity.latest(root: URL(fileURLWithPath: args[2]), now: now) {
+        out["id"] = session.id
+        out["state"] = session.state
+        out["steps"] = session.steps.map { ["kind": $0.kind.rawValue, "text": $0.text] }
+    }
+    print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)
 }
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--claude-setup" {
