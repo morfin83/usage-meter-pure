@@ -634,7 +634,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.addButton(withTitle: L("Obnovit"))
         alert.addButton(withTitle: L("Zrušit"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let command = "claude \\\"Reply with the single word: ok\\\""
+        // Runs in the app's own folder: Claude Code asks once to trust a folder, and the prompt would block the message.
+        let folder = AppSupport.directory.path.replacingOccurrences(of: "'", with: "'\\''")
+        let command = "mkdir -p '\(folder)' && cd '\(folder)' && claude \\\"Reply with the single word: ok\\\""
         let source = "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell"
         var error: NSDictionary?
         NSAppleScript(source: source)?.executeAndReturnError(&error)
