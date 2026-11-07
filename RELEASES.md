@@ -2,12 +2,12 @@
 
 Only facts that were checked are listed here. Checksums are SHA-256 of the distributed DMG.
 
-## 0.6.1 build 12 — gauge bars (installed locally, release pending approval)
+## 0.6.2 build 13 — gauge bars (installed locally, release pending approval)
 
 - Claude and Codex limits as bars with three zones (green to 50 %, orange to 85 %, red above) and an arrow at the current use.
 - A click on a bar switches it to a 24-hour curve; another click switches back. The choice is kept across launches.
 - Codex has a local 7-day history, so Codex has curves too; Codex refreshes every 30 s.
-- DMG: `Usage-Meter-Pure-0.6.1-build12-arm64.dmg`, SHA-256 `4047f91437c86f02173c7687f813027a1e3d7da9555e838ef645ed41a8f35922`.
+- DMG: `Usage-Meter-Pure-0.6.1-build13-arm64.dmg`, SHA-256 `8c848bb1f98fc5b74611b4f2168d5875bfa83bc682acdf9dd872c0e8b26c6581`.
 - Verified: 48 Python tests; visual check of bars, arrow, toggle and persistence on the running app; the app installed from the DMG and the Claude status line re-pointed automatically.
 - Not verified: clean macOS 13+ machine; a live Claude Code session showing status-line data.
 
