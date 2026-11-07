@@ -313,7 +313,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let gpu = MeterRow("GPU", tint: Palette.gpu)
     let network = MeterRow(L("Síť"), tint: Palette.network)
     let updated = NSTextField(labelWithString: L("Limity: načítání…"))
-    let creditLabel = NSTextField(labelWithString: L("Tokeny: API neposkytuje"))
+    let creditLabel = NSTextField(labelWithString: L("Kredity: API neposkytuje zůstatek"))
+    let codexTokensLabel = NSTextField(labelWithString: L("Tokeny z Codex logů: načítání…"))
     let codexTitle = NSTextField(labelWithString: "Codex")
     let codexActivityButton = NSButton(title: "", target: nil, action: nil)
     lazy var codexActivity = CodexActivityWindow()
@@ -455,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             title.textColor = .secondaryLabelColor
         }
         claudeLive.font = .systemFont(ofSize: 9, weight: .medium)
-        for note in [claudeTokens, claudeUpdated, claudeSetupLabel] {
+        for note in [claudeTokens, claudeUpdated, claudeSetupLabel, codexTokensLabel] {
             note.font = .systemFont(ofSize: 9)
             note.textColor = .tertiaryLabelColor
         }
@@ -473,6 +474,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aiSwitch.setAccessibilityLabel(L("Zobrazit AI"))
         let aiHeader = NSStackView(views: [NSTextField(labelWithString: "AI"), NSView(), aiSwitch])
         aiHeader.orientation = .horizontal
+        // Status notes may need two lines; wrap them inside the panel width.
+        for note in [claudeUpdated, claudeSetupLabel] {
+            note.maximumNumberOfLines = 0
+            note.lineBreakMode = .byWordWrapping
+            note.preferredMaxLayoutWidth = 260
+        }
         codexActivityButton.title = L("Aktivita ▸")
         codexActivityButton.bezelStyle = .inline
         codexActivityButton.font = .systemFont(ofSize: 10)
@@ -480,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         codexActivityButton.action = #selector(toggleCodexActivity)
         let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
         codexHeader.orientation = .horizontal
-        aiBody = vertical([codexHeader, quota, weekly, creditLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
         for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
@@ -712,6 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 CodexHistory.record(data, now: Date().timeIntervalSince1970)
                 codexHistory = CodexHistory.load()
             }
+            let codexTokens = CodexTokens.cachedTotals(now: Date().timeIntervalSince1970)
             let result = data
             let codexSamples = codexHistory
             DispatchQueue.main.async {
@@ -724,7 +732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.updated.textColor = .systemOrange
                     return
                 }
-                self.applyUsage(data, history: codexSamples)
+                self.applyUsage(data, history: codexSamples, tokens: codexTokens)
             }
         }
     }
@@ -770,19 +778,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             claudeUpdated.textColor = .systemOrange
             return
         }
+        var hints: [String] = []
+        if !snap.fromStatusline { hints.append(L("Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu.")) }
+        if stale { hints.append(L("Obnovte: Claude → Nastavení → Využití.")) }
         if stale {
-            claudeUpdated.stringValue = LF("Claude: starší údaj (%@ min)", String(Int(age / 60)))
+            claudeUpdated.stringValue = ([LF("Claude: starší údaj (%@ min)", String(Int(age / 60)))] + hints).joined(separator: "\n")
             claudeUpdated.textColor = .systemOrange
         } else {
             let clock = DateFormatter()
             clock.dateFormat = "HH:mm"
             let source = snap.fromStatusline ? L("Claude Code (statusline)") : L("aplikace Claude")
-            claudeUpdated.stringValue = LF("Claude: údaj z %@, %@", clock.string(from: Date(timeIntervalSince1970: snap.planObservedAt ?? now)), source)
-            claudeUpdated.textColor = .tertiaryLabelColor
+            claudeUpdated.stringValue = ([LF("Claude: údaj z %@, %@", clock.string(from: Date(timeIntervalSince1970: snap.planObservedAt ?? now)), source)] + hints).joined(separator: "\n")
+            claudeUpdated.textColor = hints.isEmpty ? .tertiaryLabelColor : .systemOrange
         }
     }
 
-    func applyUsage(_ data: [String: Any], history: [UsageSample]) {
+    func applyUsage(_ data: [String: Any], history: [UsageSample], tokens: CodexTokens.Totals?) {
+        if let tokens = tokens {
+            codexTokensLabel.stringValue = LF("Tokeny z Codex logů: 5 h %@ · 7 dní %@", ClaudeUsage.compact(tokens.fiveHour), ClaudeUsage.compact(tokens.week))
+        } else {
+            codexTokensLabel.stringValue = L("Tokeny z Codex logů: žádné záznamy")
+        }
         quota.samples = history
         weekly.samples = history
         let buckets = data["buckets"] as? [[String: Any]] ?? []
@@ -815,8 +831,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else { row.update(window?["remainingPercent"] as? Double, tooltip: tooltip) }
         }
         if let balance = bucket["creditBalance"] as? String {
-            creditLabel.stringValue = LF("Kredity: %@ · tokeny: API neposkytuje", balance)
-        } else { creditLabel.stringValue = L("Kredity / tokeny: API neposkytuje zůstatek") }
+            creditLabel.stringValue = LF("Kredity: %@", balance)
+        } else { creditLabel.stringValue = L("Kredity: API neposkytuje zůstatek") }
         let restricted = bucket["spendControlReached"] as? Bool == true || bucket["limitReached"] as? Bool == true
         lastUsage = Date(timeIntervalSince1970: data["observedAt"] as? Double ?? Date().timeIntervalSince1970)
         lastFetchFailed = false
@@ -1311,6 +1327,62 @@ final class CodexActivityWindow: NSObject {
         var error: NSDictionary?
         script?.executeAndReturnError(&error)
         if error != nil { stateLabel.stringValue = L("Příkaz je zkopírován: vložte ho do Terminálu.") }
+    }
+}
+
+/// Token totals from the Codex CLI session logs (`~/.codex/sessions`). These are local token counts, not the plan limit.
+/// Counted per `last_token_usage.total_tokens` of each `token_count` event; events repeated across files count once.
+enum CodexTokens {
+    struct Totals {
+        let fiveHour: Int
+        let week: Int
+    }
+
+    static var sessions: URL {
+        if let override = ProcessInfo.processInfo.environment["USAGE_METER_TEST_CODEX"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions", isDirectory: true)
+    }
+
+    private static var cache: (computed: Double, totals: Totals?)?
+    static let cacheSeconds: Double = 300
+
+    /// Only called from the refresh queue; the cache avoids reading the logs every 30 seconds.
+    static func cachedTotals(now: Double) -> Totals? {
+        if let cache = cache, now - cache.computed < cacheSeconds { return cache.totals }
+        let totals = totals(root: sessions, now: now)
+        cache = (now, totals)
+        return totals
+    }
+
+    static func totals(root: URL, now: Double) -> Totals? {
+        guard FileManager.default.fileExists(atPath: root.path),
+              let walker = FileManager.default.enumerator(at: root,
+                  includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return nil }
+        let weekAgo = now - 7 * 24 * 3600
+        let fiveAgo = now - 5 * 3600
+        let marker = Data("token_count".utf8)
+        var seen = Set<String>()
+        var five = 0, week = 0
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            guard modified >= weekAgo, let data = try? Data(contentsOf: url) else { continue }
+            for line in data.split(separator: 0x0A) where line.range(of: marker) != nil {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let payload = object["payload"] as? [String: Any],
+                      payload["type"] as? String == "token_count",
+                      let stamp = object["timestamp"] as? String,
+                      let time = ClaudeUsage.parseTime(stamp),
+                      let info = payload["info"] as? [String: Any],
+                      let last = info["last_token_usage"] as? [String: Any],
+                      let tokens = CodexUsage.finiteNumber(last["total_tokens"]) else { continue }
+                guard seen.insert("\(stamp)|\(Int(tokens))").inserted else { continue }
+                if time >= weekAgo { week += Int(tokens) }
+                if time >= fiveAgo { five += Int(tokens) }
+            }
+        }
+        return Totals(fiveHour: five, week: week)
     }
 }
 
@@ -1976,6 +2048,13 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-acti
         out["state"] = session.state
         out["steps"] = session.steps.map { ["kind": $0.kind.rawValue, "text": $0.text] }
     }
+    print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-tokens" {
+    let args = CommandLine.arguments
+    let totals = CodexTokens.totals(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0)
+    let out: [String: Any] = ["fiveHour": totals?.fiveHour ?? -1, "week": totals?.week ?? -1]
     print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)
 }
