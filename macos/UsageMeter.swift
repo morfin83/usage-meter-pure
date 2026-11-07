@@ -325,6 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let claudeUpdated = NSTextField(labelWithString: L("Claude: načítání…"))
     let claudeSetupLabel = NSTextField(labelWithString: "")
     let claudeLive = NSTextField(labelWithString: "")
+    let claudeRefreshButton = ClickableLabel(labelWithString: "")
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -486,7 +487,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         codexActivityButton.onClick = { [weak self] in self?.codexActivity.show() }
         let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
         codexHeader.orientation = .horizontal
-        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeTitle, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        claudeRefreshButton.stringValue = L("Obnovit Claude ↻")
+        claudeRefreshButton.font = .systemFont(ofSize: 10, weight: .medium)
+        claudeRefreshButton.textColor = .controlAccentColor
+        claudeRefreshButton.onClick = { [weak self] in self?.refreshClaude() }
+        let claudeHeader = NSStackView(views: [claudeTitle, NSView(), claudeRefreshButton])
+        claudeHeader.orientation = .horizontal
+        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeHeader, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
         for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
@@ -618,6 +625,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if positioned && !resizing { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: "panelOrigin") }
     }
     @objc func openWebsite() { NSWorkspace.shared.open(URL(string: "https://www.studiopuresound.cz")!) }
+    /// Asks first, because a refresh is a real (small) model request. The status line only updates
+    /// inside an interactive Claude Code session, so the request runs there and the session is left open.
+    func refreshClaude() {
+        let alert = NSAlert()
+        alert.messageText = L("Obnovit data Claude?")
+        alert.informativeText = L("Otevře se Terminál s Claude Code a pošle se jedna krátká zpráva. Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD na Haiku, víc na větším modelu). Potom Terminál můžete zavřít.")
+        alert.addButton(withTitle: L("Obnovit"))
+        alert.addButton(withTitle: L("Zrušit"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // Runs in the app's own folder: Claude Code asks once to trust a folder, and the prompt would block the message.
+        let folder = AppSupport.directory.path.replacingOccurrences(of: "'", with: "'\\''")
+        let command = "mkdir -p '\(folder)' && cd '\(folder)' && claude \\\"Reply with the single word: ok\\\""
+        let source = "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell"
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        if error != nil {
+            claudeUpdated.stringValue = L("Terminál nelze ovládat. Povolte Usage Meter Pure v Soukromí a zabezpečení > Automatizace.")
+            claudeUpdated.textColor = .systemOrange
+        }
+    }
+
     @objc func toggleAI() { aiBody.isHidden = aiSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleShow() { body.isHidden = showSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleDetails() { details.isHidden = detailSwitch.state == .off; saveSwitches(); resize() }

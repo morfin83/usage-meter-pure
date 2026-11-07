@@ -79,5 +79,11 @@
   "Otevřít v Codexu": "Otevřít v Codexu",
   "Otevřít v Terminálu": "Otevřít v Terminálu",
   "Aplikace Codex nebyla nalezena.": "Aplikace Codex nebyla nalezena.",
-  "Příkaz je zkopírován: vložte ho do Terminálu.": "Příkaz je zkopírován: vložte ho do Terminálu."
+  "Příkaz je zkopírován: vložte ho do Terminálu.": "Příkaz je zkopírován: vložte ho do Terminálu.",
+  "Obnovit Claude ↻": "Obnovit Claude ↻",
+  "Obnovit data Claude?": "Obnovit data Claude?",
+  "Otevře se Terminál s Claude Code a pošle se jedna krátká zpráva. Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD na Haiku, víc na větším modelu). Potom Terminál můžete zavřít.": "Otevře se Terminál s Claude Code a pošle se jedna krátká zpráva. Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD na Haiku, víc na větším modelu). Potom Terminál můžete zavřít.",
+  "Obnovit": "Obnovit",
+  "Zrušit": "Zrušit",
+  "Terminál nelze ovládat. Povolte Usage Meter Pure v Soukromí a zabezpečení > Automatizace.": "Terminál nelze ovládat. Povolte Usage Meter Pure v Soukromí a zabezpečení > Automatizace."
 }

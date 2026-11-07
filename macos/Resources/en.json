@@ -79,5 +79,11 @@
   "Otevřít v Codexu": "Open in Codex",
   "Otevřít v Terminálu": "Open in Terminal",
   "Aplikace Codex nebyla nalezena.": "The Codex app was not found.",
-  "Příkaz je zkopírován: vložte ho do Terminálu.": "The command is copied: paste it into Terminal."
+  "Příkaz je zkopírován: vložte ho do Terminálu.": "The command is copied: paste it into Terminal.",
+  "Obnovit Claude ↻": "Refresh Claude ↻",
+  "Obnovit data Claude?": "Refresh Claude data?",
+  "Otevře se Terminál s Claude Code a pošle se jedna krátká zpráva. Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD na Haiku, víc na větším modelu). Potom Terminál můžete zavřít.": "Terminal opens with Claude Code and one short message is sent. This uses about 60,000 tokens (about 0.01 USD on Haiku, more on a larger model). You can close Terminal afterwards.",
+  "Obnovit": "Refresh",
+  "Zrušit": "Cancel",
+  "Terminál nelze ovládat. Povolte Usage Meter Pure v Soukromí a zabezpečení > Automatizace.": "Terminal cannot be controlled. Allow Usage Meter Pure in Privacy & Security > Automation."
 }

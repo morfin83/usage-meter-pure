@@ -1,6 +1,6 @@
 # Zpráva o testech
 
-Datum: 2026-11-01. Větev: `feat/gauge-bars` (sloučena do `main`). Verze 0.6.1 build 12. Testů: 48 OK.
+Datum: 2026-11-01. Větev: `feat/gauge-bars` (sloučena do `main`). Verze 0.6.2 build 13. Testů: 48 OK.
 
 ## Příkazy a výsledky
 - `python3 -m unittest discover -s tests -v` — **38 testů prošlo.**
