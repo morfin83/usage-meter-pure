@@ -27,6 +27,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleLocalizations</key><array><string>cs</string><string>en</string></array>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Usage Meter Pure otevře Terminál a spustí Claude Code, když kliknete na Obnovit Claude.</string>
 </dict></plist>
 PLIST
 dot_clean -m "$APP_DIR"
