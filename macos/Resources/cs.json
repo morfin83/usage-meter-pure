@@ -3,7 +3,6 @@
   "Údaj není dostupný.": "Údaj není dostupný.",
   "Síť": "Síť",
   "Limity: načítání…": "Limity: načítání…",
-  "Tokeny: API neposkytuje": "Tokeny: API neposkytuje",
   "Zbývá · krátkodobý limit": "Zbývá · krátkodobý limit",
   "Zbývá · dlouhodobý limit": "Zbývá · dlouhodobý limit",
   "Usage Meter Pure · limity a výkon Macu": "Usage Meter Pure · limity a výkon Macu",
@@ -31,7 +30,6 @@
   "Sdílený limit účtu Codex, ne tokeny této konverzace.": "Sdílený limit účtu Codex, ne tokeny této konverzace.",
   " Obnova: ": " Obnova: ",
   " Čeká se na nový stav po obnově.": " Čeká se na nový stav po obnově.",
-  "Kredity / tokeny: API neposkytuje zůstatek": "Kredity / tokeny: API neposkytuje zůstatek",
   "Účet hlásí omezení čerpání": "Účet hlásí omezení čerpání",
   "Rychlost aktivního síťového rozhraní není dostupná.": "Rychlost aktivního síťového rozhraní není dostupná.",
   "Přetažením přesuňte panel": "Přetažením přesuňte panel",
@@ -40,7 +38,6 @@
   "Logické jádro CPU %@, poslední interval.": "Logické jádro CPU %@, poslední interval.",
   "Limity: starší údaj (%@ min) · nelze obnovit": "Limity: starší údaj (%@ min) · nelze obnovit",
   "Zbývá · %@": "Zbývá · %@",
-  "Kredity: %@ · tokeny: API neposkytuje": "Kredity: %@ · tokeny: API neposkytuje",
   "Limity %@ · Mac každé 2 s": "Limity %@ · Mac každé 2 s",
   "%@: systém neudává kapacitu linky. Procento nelze určit.": "%@: systém neudává kapacitu linky. Procento nelze určit.",
   "První vzorek: %@, %@ Mb/s.": "První vzorek: %@, %@ Mb/s.",
@@ -57,5 +54,12 @@
   "Claude: údaj z %@": "Claude: údaj z %@",
   "● Claude: aktivní": "● Claude: aktivní",
   "○ Claude: neaktivní · poslední data před %@": "○ Claude: neaktivní · poslední data před %@",
-  "○ Claude: zatím žádná data": "○ Claude: zatím žádná data"
+  "○ Claude: zatím žádná data": "○ Claude: zatím žádná data",
+  "Kredity: %@": "Kredity: %@",
+  "Kredity: API neposkytuje zůstatek": "Kredity: API neposkytuje zůstatek",
+  "Tokeny z Codex logů: načítání…": "Tokeny z Codex logů: načítání…",
+  "Tokeny z Codex logů: 5 h %@ · 7 dní %@": "Tokeny z Codex logů: 5 h %@ · 7 dní %@",
+  "Tokeny z Codex logů: žádné záznamy": "Tokeny z Codex logů: žádné záznamy",
+  "Obnovte: Claude → Nastavení → Využití.": "Obnovte: Claude → Nastavení → Využití.",
+  "Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu.": "Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu."
 }
