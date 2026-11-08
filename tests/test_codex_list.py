@@ -61,6 +61,35 @@ class CodexListTests(unittest.TestCase):
         self.assertEqual(items[0]["state"], "running")
         self.assertEqual(items[1]["state"], "done")
 
+    def test_kind_and_model_of_the_thread(self):
+        meta = {"type": "session_meta", "payload": {"originator": "Codex Desktop", "thread_source": "user",
+                                                    "runtime_workspace_roots": ["/tmp/project"]}}
+        self.session_raw("00000000-0000-4000-8000-000000000005", [
+            json.dumps(meta),
+            line(NOW - 40, "turn_context", {"model": "gpt-6-astra", "effort": "ultra"}),
+            line(NOW - 30, "event_msg", {"type": "task_started"}),
+        ], NOW - 5)
+        item = self.list()[0]
+        self.assertEqual(item["kind"], "workspace")
+        self.assertEqual(item["model"], "gpt-6-astra · ultra")
+
+    def test_cli_and_chat_kinds(self):
+        self.session_raw("00000000-0000-4000-8000-000000000006", [
+            json.dumps({"type": "session_meta", "payload": {"originator": "codex_exec", "thread_source": "user"}}),
+            line(NOW - 30, "event_msg", {"type": "task_started"})], NOW - 5)
+        self.session_raw("00000000-0000-4000-8000-000000000007", [
+            json.dumps({"type": "session_meta", "payload": {"originator": "Codex Desktop", "thread_source": "user",
+                                                            "runtime_workspace_roots": []}}),
+            line(NOW - 20, "event_msg", {"type": "task_started"})], NOW - 4)
+        kinds = {i["id"][-1]: i["kind"] for i in self.list()}
+        self.assertEqual(kinds["6"], "cli")
+        self.assertEqual(kinds["7"], "chat")
+
+    def session_raw(self, uid, lines, modified):
+        path = self.root / f"rollout-2026-11-07T10-00-00-{uid}.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+        os.utime(path, (modified, modified))
+
     def test_items_older_than_a_day_are_left_out(self):
         self.session("00000000-0000-4000-8000-000000000003",
                      [line(NOW - 2 * 86400, "event_msg", {"type": "task_started"})],

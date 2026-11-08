@@ -88,5 +88,10 @@
   "Claude: obnovuji data…": "Claude: refreshing data…",
   "Claude: data obnovena.": "Claude: data refreshed.",
   "Claude: obnovení se nepovedlo. Zkuste to znovu.": "Claude: refresh failed. Try again.",
-  "Aktivity Codexu za 24 h": "Codex activity, last 24 h"
+  "Aktivity Codexu za 24 h": "Codex activity, last 24 h",
+  "chat": "chat",
+  "workspace": "workspace",
+  "Codex CLI": "Codex CLI",
+  "subagent": "subagent",
+  "model neznámý": "model unknown"
 }

@@ -1204,13 +1204,21 @@ enum CodexActivity {
     struct Session {
         let id: String
         let title: String          // first request of the user, shortened
+        let kind: String           // "chat", "workspace", "cli", "subagent" (see `kind(of:)`)
+        let model: String          // model and reasoning effort of the latest turn, e.g. "gpt-6-astra · ultra"
         let state: String          // "running", "done", "aborted", "idle"
         let updated: Double
         let steps: [Step]
     }
 
+    struct Meta {
+        let title: String
+        let kind: String
+        let model: String
+    }
+
     private static let titleLock = NSLock()
-    private static var titles: [String: (modified: Double, title: String)] = [:]
+    private static var metas: [String: (modified: Double, meta: Meta)] = [:]
 
     /// Recent sessions (last 24 h), newest first. Each entry reads only the tail of its log.
     static func list(root: URL = sessions, now: Double, limit: Int = 40) -> [Session] {
@@ -1225,7 +1233,9 @@ enum CodexActivity {
         let sessions: [Session] = files.prefix(limit).compactMap { file in
             guard let lines = tailLines(of: file.url) else { return nil }
             let session = parse(lines: lines, id: sessionID(file.url), modified: file.modified, now: now)
-            return Session(id: session.id, title: title(of: file.url, modified: file.modified), state: session.state,
+            let meta = meta(of: file.url, modified: file.modified)
+            return Session(id: session.id, title: meta.title, kind: meta.kind,
+                           model: session.model.isEmpty ? meta.model : session.model, state: session.state,
                            updated: session.updated, steps: session.steps)
         }
         // Running items first; the sort is stable, so the newest order is kept inside each group.
@@ -1243,32 +1253,6 @@ enum CodexActivity {
         var lines = data.split(separator: 0x0A)
         if start > 0, !lines.isEmpty { lines.removeFirst() }
         return lines
-    }
-
-    /// The first real request of the user in the log. The title is cached per file and modification time.
-    static func title(of url: URL, modified: Double) -> String {
-        titleLock.lock()
-        if let cached = titles[url.path], cached.modified == modified { titleLock.unlock(); return cached.title }
-        titleLock.unlock()
-        var found = "Bez názvu"
-        if let handle = try? FileHandle(forReadingFrom: url) {
-            let head = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
-            try? handle.close()
-            for line in head.split(separator: 0x0A) {
-                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                      let payload = object["payload"] as? [String: Any],
-                      payload["role"] as? String == "user" else { continue }
-                let text = ((payload["content"] as? [[String: Any]]) ?? []).compactMap { $0["text"] as? String }.joined(separator: " ")
-                let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
-                if oneLine.isEmpty || oneLine.hasPrefix("<") || oneLine.hasPrefix("#") { continue }
-                found = oneLine.count > 70 ? String(oneLine.prefix(70)) + "…" : oneLine
-                break
-            }
-        }
-        titleLock.lock()
-        titles[url.path] = (modified, found)
-        titleLock.unlock()
-        return found
     }
 
     static var sessions: URL {
@@ -1306,10 +1290,60 @@ enum CodexActivity {
         return stem.count >= 36 ? String(stem.suffix(36)) : stem
     }
 
+    /// Title (first real request of the user) and kind of the thread, read from the head of the log.
+    static func meta(of url: URL, modified: Double) -> Meta {
+        titleLock.lock()
+        if let cached = metas[url.path], cached.modified == modified { titleLock.unlock(); return cached.meta }
+        titleLock.unlock()
+        var title = "Bez názvu"
+        var kind = "chat"
+        var model = ""
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            let head = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
+            try? handle.close()
+            var foundTitle = false
+            for line in head.split(separator: 0x0A) {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                let payload = object["payload"] as? [String: Any] ?? [:]
+                if object["type"] as? String == "session_meta" {
+                    kind = self.kind(of: payload)
+                    continue
+                }
+                if object["type"] as? String == "turn_context", model.isEmpty, let name = payload["model"] as? String {
+                    let effort = payload["effort"] as? String ?? ""
+                    model = effort.isEmpty ? name : "\(name) · \(effort)"
+                    continue
+                }
+                guard !foundTitle, payload["role"] as? String == "user" else { continue }
+                let text = ((payload["content"] as? [[String: Any]]) ?? []).compactMap { $0["text"] as? String }.joined(separator: " ")
+                let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                if oneLine.isEmpty || oneLine.hasPrefix("<") || oneLine.hasPrefix("#") { continue }
+                title = oneLine.count > 70 ? String(oneLine.prefix(70)) + "…" : oneLine
+                foundTitle = true
+            }
+        }
+        let meta = Meta(title: title, kind: kind, model: model)
+        titleLock.lock()
+        metas[url.path] = (modified, meta)
+        titleLock.unlock()
+        return meta
+    }
+
+    /// Where the thread lives: a plain chat, a project (workspace), the CLI, or an internal subagent / review.
+    static func kind(of meta: [String: Any]) -> String {
+        let thread = meta["thread_source"] as? String ?? ""
+        let origin = meta["originator"] as? String ?? ""
+        if thread == "subagent" || thread == "guardian_review" { return "subagent" }
+        if origin.contains("exec") || origin.contains("tui") { return "cli" }
+        if let roots = meta["runtime_workspace_roots"] as? [String], !roots.isEmpty { return "workspace" }
+        return "chat"
+    }
+
     static func parse(lines: [Data.SubSequence], id: String, modified: Double, now: Double) -> Session {
         var steps: [Step] = []
         var pending: [String: Int] = [:]            // call id -> index of its running step
         var lastStarted: Double?, lastFinished: Double?, aborted = false
+        var model = ""
         for line in lines {
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
             let time = ClaudeUsage.parseTime(object["timestamp"] as? String ?? "") ?? modified
@@ -1317,6 +1351,10 @@ enum CodexActivity {
             let kind = object["type"] as? String ?? ""
             let type = payload["type"] as? String ?? ""
             switch (kind, type) {
+            case ("turn_context", _):
+                let name = payload["model"] as? String ?? ""
+                let effort = payload["effort"] as? String ?? ""
+                if !name.isEmpty { model = effort.isEmpty ? name : "\(name) · \(effort)" }
             case ("event_msg", "task_started"):
                 lastStarted = time
                 steps.append(Step(time: time, kind: .running, text: "Zadání úlohy"))
@@ -1359,7 +1397,7 @@ enum CodexActivity {
         else if let started = lastStarted, (lastFinished ?? 0) < started { state = now - modified < 120 ? "running" : "idle" }
         else if lastFinished != nil { state = "done" }
         else { state = "idle" }
-        return Session(id: id, title: "", state: state, updated: modified, steps: Array(steps.suffix(12)))
+        return Session(id: id, title: "", kind: "", model: model, state: state, updated: modified, steps: Array(steps.suffix(12)))
     }
 
     /// A readable name for a tool call. Raw code of the `exec` tool is not shown.
@@ -1413,7 +1451,10 @@ final class ActivityRow: NSView {
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let state = ["running": L("● Běží"), "done": L("✓ Dokončeno"), "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")][session.state] ?? session.state
-        stateLabel.stringValue = state
+        let kind = ["chat": L("chat"), "workspace": L("workspace"), "cli": L("Codex CLI"), "subagent": L("subagent")][session.kind] ?? ""
+        let model = session.model.isEmpty ? L("model neznámý") : session.model
+        let parts = [state, kind, model].filter { !$0.isEmpty }
+        stateLabel.stringValue = parts.joined(separator: " · ")
         stateLabel.font = .systemFont(ofSize: 10, weight: .medium)
         stateLabel.textColor = session.state == "running" ? .systemGreen : session.state == "aborted" ? .systemRed : .secondaryLabelColor
         let last = session.steps.last
@@ -2304,7 +2345,7 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-hist
 if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-list" {
     let args = CommandLine.arguments
     let items = CodexActivity.list(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0).map { session -> [String: Any] in
-        ["id": session.id, "title": session.title, "state": session.state, "last": session.steps.last?.text ?? ""]
+        ["id": session.id, "title": session.title, "kind": session.kind, "model": session.model, "state": session.state, "last": session.steps.last?.text ?? ""]
     }
     print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)

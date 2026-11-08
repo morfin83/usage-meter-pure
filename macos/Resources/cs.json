@@ -88,5 +88,10 @@
   "Claude: obnovuji data…": "Claude: obnovuji data…",
   "Claude: data obnovena.": "Claude: data obnovena.",
   "Claude: obnovení se nepovedlo. Zkuste to znovu.": "Claude: obnovení se nepovedlo. Zkuste to znovu.",
-  "Aktivity Codexu za 24 h": "Aktivity Codexu za 24 h"
+  "Aktivity Codexu za 24 h": "Aktivity Codexu za 24 h",
+  "chat": "chat",
+  "workspace": "workspace",
+  "Codex CLI": "Codex CLI",
+  "subagent": "subagent",
+  "model neznámý": "model neznámý"
 }
