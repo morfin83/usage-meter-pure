@@ -87,5 +87,6 @@
   "Na pozadí se pošle jedna krátká zpráva Claude Code (model Haiku). Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD).": "A single short Claude Code message is sent in the background (Haiku model). This uses about 60,000 tokens (about 0.01 USD).",
   "Claude: obnovuji data…": "Claude: refreshing data…",
   "Claude: data obnovena.": "Claude: data refreshed.",
-  "Claude: obnovení se nepovedlo. Zkuste to znovu.": "Claude: refresh failed. Try again."
+  "Claude: obnovení se nepovedlo. Zkuste to znovu.": "Claude: refresh failed. Try again.",
+  "Aktivity Codexu za 24 h": "Codex activity, last 24 h"
 }

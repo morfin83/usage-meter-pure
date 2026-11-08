@@ -61,3 +61,7 @@ Při každém spuštění aplikace zajistí položku `statusLine` v `~/.claude/s
 - `CodexTokens.cachedTotals` sums `last_token_usage.total_tokens` across the logs, cached for five minutes; it runs after the limits are shown.
 - Test hooks: `--codex-activity <root> <now>`, `--codex-tokens <root> <now>`.
 
+## Codex drawer (feat/codex-activity-drawer)
+- `CodexActivity.list` returns the sessions of the last 24 h (up to 40), running ones first; each reads only the tail of its log, titles come from the first user request and are cached per file.
+- `CodexDrawer` is a child panel that slides out beside the main panel (300 pt wide, scrollable). Each `ActivityRow` opens `codex://threads/<id>` on click; the link format was found in the desktop app's own bundle.
+

@@ -29,4 +29,6 @@ Stavy: DONE = hotovo a kryto kontrolou v repozitáři; PARTIAL = hotovo, ne zcel
 | Odpočet „Obnova za …" u každého limitu Codex i Claude | DONE | ruční ověření |
 | Proklik „Otevřít v Codexu" a „Otevřít v Terminálu" (`codex resume <id>`) | PARTIAL | Terminál vyžaduje oprávnění k ovládání Terminálu; ověřeno bez AppleScriptu |
 | Tokeny Codex z lokálních logů (5 h, 7 dní) | DONE | `test_codex_tokens.py`; shoda s nezávislým výpočtem |
+| Výsuvný šuflík „Aktivity Codexu za 24 h": běžící položky nahoře, scrollování, klik otevře vlákno v desktopové aplikaci Codex (`codex://threads/<id>`) | DONE | `test_codex_list.py`; ruční ověření klikem |
+| Otevření vlákna na konkrétním místě (ne jen na vlákně) | NOT POSSIBLE | aplikace nemá odkaz na konkrétní zprávu; otevře se vlákno |
 

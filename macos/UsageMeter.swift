@@ -317,7 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let codexTokensLabel = NSTextField(labelWithString: L("Tokeny z Codex logů: načítání…"))
     let codexTitle = NSTextField(labelWithString: "Codex")
     let codexActivityButton = ClickableLabel(labelWithString: "")
-    lazy var codexActivity = CodexActivityWindow()
+    lazy var codexActivity = CodexDrawer()
     let claudeTitle = NSTextField(labelWithString: "Claude")
     let claudeFive = GaugeRow(L("Claude · zbývá 5 h"), key: "claude.5h", tint: Palette.claude, series: \.five)
     let claudeWeek = GaugeRow(L("Claude · zbývá týden"), key: "claude.week", tint: Palette.claude, series: \.week)
@@ -485,7 +485,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         codexActivityButton.stringValue = L("Aktivita ▸")
         codexActivityButton.font = .systemFont(ofSize: 10, weight: .medium)
         codexActivityButton.textColor = .controlAccentColor
-        codexActivityButton.onClick = { [weak self] in self?.codexActivity.show() }
+        codexActivityButton.onClick = { [weak self] in
+            guard let self = self else { return }
+            self.codexActivity.toggle(parent: self.panel)
+        }
         let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
         codexHeader.orientation = .horizontal
         claudeRefreshButton.stringValue = L("Obnovit Claude ↻")
@@ -1200,9 +1203,72 @@ enum CodexActivity {
 
     struct Session {
         let id: String
+        let title: String          // first request of the user, shortened
         let state: String          // "running", "done", "aborted", "idle"
         let updated: Double
         let steps: [Step]
+    }
+
+    private static let titleLock = NSLock()
+    private static var titles: [String: (modified: Double, title: String)] = [:]
+
+    /// Recent sessions (last 24 h), newest first. Each entry reads only the tail of its log.
+    static func list(root: URL = sessions, now: Double, limit: Int = 40) -> [Session] {
+        guard let walker = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [] }
+        var files: [(url: URL, modified: Double)] = []
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            if now - modified <= 24 * 3600 { files.append((url, modified)) }
+        }
+        files.sort { $0.modified > $1.modified }
+        let sessions: [Session] = files.prefix(limit).compactMap { file in
+            guard let lines = tailLines(of: file.url) else { return nil }
+            let session = parse(lines: lines, id: sessionID(file.url), modified: file.modified, now: now)
+            return Session(id: session.id, title: title(of: file.url, modified: file.modified), state: session.state,
+                           updated: session.updated, steps: session.steps)
+        }
+        // Running items first; the sort is stable, so the newest order is kept inside each group.
+        return sessions.filter { $0.state == "running" } + sessions.filter { $0.state != "running" }
+    }
+
+    static func tailLines(of url: URL) -> [Data.SubSequence]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let window: UInt64 = 256 * 1024
+        let start = size > window ? size - window : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd() else { return nil }
+        var lines = data.split(separator: 0x0A)
+        if start > 0, !lines.isEmpty { lines.removeFirst() }
+        return lines
+    }
+
+    /// The first real request of the user in the log. The title is cached per file and modification time.
+    static func title(of url: URL, modified: Double) -> String {
+        titleLock.lock()
+        if let cached = titles[url.path], cached.modified == modified { titleLock.unlock(); return cached.title }
+        titleLock.unlock()
+        var found = "Bez názvu"
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            let head = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
+            try? handle.close()
+            for line in head.split(separator: 0x0A) {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let payload = object["payload"] as? [String: Any],
+                      payload["role"] as? String == "user" else { continue }
+                let text = ((payload["content"] as? [[String: Any]]) ?? []).compactMap { $0["text"] as? String }.joined(separator: " ")
+                let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                if oneLine.isEmpty || oneLine.hasPrefix("<") || oneLine.hasPrefix("#") { continue }
+                found = oneLine.count > 70 ? String(oneLine.prefix(70)) + "…" : oneLine
+                break
+            }
+        }
+        titleLock.lock()
+        titles[url.path] = (modified, found)
+        titleLock.unlock()
+        return found
     }
 
     static var sessions: URL {
@@ -1256,6 +1322,7 @@ enum CodexActivity {
                 steps.append(Step(time: time, kind: .running, text: "Zadání úlohy"))
             case ("event_msg", "task_complete"):
                 lastFinished = time
+                aborted = false          // the last ending decides: an earlier abort does not stick
                 steps.append(Step(time: time, kind: .done, text: "Úloha dokončena"))
             case ("event_msg", "turn_aborted"):
                 lastFinished = time
@@ -1292,7 +1359,7 @@ enum CodexActivity {
         else if let started = lastStarted, (lastFinished ?? 0) < started { state = now - modified < 120 ? "running" : "idle" }
         else if lastFinished != nil { state = "done" }
         else { state = "idle" }
-        return Session(id: id, state: state, updated: modified, steps: Array(steps.suffix(12)))
+        return Session(id: id, title: "", state: state, updated: modified, steps: Array(steps.suffix(12)))
     }
 
     /// A readable name for a tool call. Raw code of the `exec` tool is not shown.
@@ -1328,142 +1395,200 @@ final class ClickableLabel: NSTextField {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
-/// Panel with what Codex is doing right now, updated every two seconds while it is open.
-final class CodexActivityWindow: NSObject {
-    private let panel: NSPanel
+/// One running item in the drawer. A click opens the desktop Codex app at that thread (`codex://threads/<id>`).
+final class ActivityRow: NSView {
+    private let titleLabel = NSTextField(labelWithString: "")
     private let stateLabel = NSTextField(labelWithString: "")
-    private let idLabel = NSTextField(labelWithString: "")
-    private let steps = NSStackView()
-    private var timer: Timer?
-    private var sessionID = ""
-    private let openApp = NSButton(title: "", target: nil, action: nil)
-    private let openTerminal = NSButton(title: "", target: nil, action: nil)
+    private let stepLabel = NSTextField(labelWithString: "")
+    private let sessionID: String
+    private var hovering = false { didSet { layer?.backgroundColor = hovering ? NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor : NSColor.clear.cgColor } }
 
-    override init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 360),
-                        styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
-        super.init()
-        panel.title = L("Codex · aktivita")
-        panel.isReleasedWhenClosed = false
-        panel.level = .floating
-        let root = NSView()
-        panel.contentView = root
-        stateLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        idLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        idLabel.textColor = .secondaryLabelColor
-        steps.orientation = .vertical
-        steps.alignment = .leading
-        steps.spacing = 4
-        openApp.title = L("Otevřít v Codexu")
-        openApp.bezelStyle = .rounded
-        openApp.target = self
-        openApp.action = #selector(openInCodex)
-        openTerminal.title = L("Otevřít v Terminálu")
-        openTerminal.bezelStyle = .rounded
-        openTerminal.target = self
-        openTerminal.action = #selector(openInTerminal)
-        let buttons = NSStackView(views: [openApp, openTerminal])
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-        let stack = NSStackView(views: [stateLabel, idLabel, steps, NSView(), buttons])
+    init(_ session: CodexActivity.Session) {
+        sessionID = session.id
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        titleLabel.stringValue = session.title
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let state = ["running": L("● Běží"), "done": L("✓ Dokončeno"), "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")][session.state] ?? session.state
+        stateLabel.stringValue = state
+        stateLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        stateLabel.textColor = session.state == "running" ? .systemGreen : session.state == "aborted" ? .systemRed : .secondaryLabelColor
+        let last = session.steps.last
+        stepLabel.stringValue = last?.text ?? ""
+        stepLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        stepLabel.textColor = .secondaryLabelColor
+        stepLabel.lineBreakMode = .byTruncatingTail
+        stepLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let top = NSStackView(views: [stateLabel, NSView()])
+        top.orientation = .horizontal
+        let stack = NSStackView(views: [titleLabel, top, stepLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14)
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(stack)
+        addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: root.topAnchor), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            steps.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28)
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            top.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            stepLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20)
         ])
-        panel.setContentSize(NSSize(width: 380, height: 360))
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+        toolTip = L("Otevřít v Codexu")
     }
 
-    func show() {
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if let url = URL(string: "codex://threads/\(sessionID)") { NSWorkspace.shared.open(url) }
+    }
+}
+
+/// Drawer with the running Codex items. It slides out to the right of the main panel and stays attached to it.
+final class CodexDrawer: NSObject {
+    private let panel: NSPanel
+    private let list = NSStackView()
+    private let empty = NSTextField(labelWithString: "")
+    private var timer: Timer?
+    private weak var parent: NSWindow?
+    static let width: CGFloat = 300
+    private(set) var isOpen = false
+
+    override init() {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 0, height: 300),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        super.init()
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isReleasedWhenClosed = false
+        panel.level = .floating
+        panel.contentMinSize = NSSize(width: CodexDrawer.width, height: 120)
+        panel.contentMaxSize = NSSize(width: CodexDrawer.width, height: 4000)
+        let background = NSVisualEffectView()
+        background.material = .hudWindow
+        background.blendingMode = .behindWindow
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.cornerRadius = 12
+        background.layer?.masksToBounds = true
+        panel.contentView = background
+
+        let title = NSTextField(labelWithString: L("Aktivity Codexu za 24 h"))
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        let close = ClickableLabel(labelWithString: "✕")
+        close.font = .systemFont(ofSize: 12, weight: .medium)
+        close.textColor = .secondaryLabelColor
+        close.onClick = { [weak self] in self?.close() }
+        let header = NSStackView(views: [title, NSView(), close])
+        header.orientation = .horizontal
+        header.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 6, right: 12)
+
+        list.orientation = .vertical
+        list.alignment = .leading
+        list.spacing = 4
+        list.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 8, right: 8)
+        empty.font = .systemFont(ofSize: 11)
+        empty.textColor = .tertiaryLabelColor
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        list.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(list)
+        scroll.documentView = document
+        NSLayoutConstraint.activate([
+            list.topAnchor.constraint(equalTo: document.topAnchor), list.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: document.trailingAnchor), list.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+        ])
+
+        let stack = NSStackView(views: [header, empty, scroll])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: background.leadingAnchor), stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: background.topAnchor), stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+    }
+
+    /// Opens the drawer next to the parent window (or closes it when open).
+    func toggle(parent: NSWindow) {
+        isOpen ? close() : open(parent: parent)
+    }
+
+    func open(parent: NSWindow) {
+        guard !isOpen else { return }
+        isOpen = true
+        self.parent = parent
+        let frame = parent.frame
+        let screen = parent.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
+        // Right of the panel when there is room, otherwise on its left side.
+        let rightSpace = screen.maxX - frame.maxX
+        let x = rightSpace >= CodexDrawer.width + 6 ? frame.maxX + 6 : frame.minX - CodexDrawer.width - 6
+        let target = NSRect(x: x, y: frame.minY, width: CodexDrawer.width, height: frame.height)
+        panel.setFrame(NSRect(x: frame.minX, y: frame.minY, width: 0, height: frame.height), display: false)
+        parent.addChildWindow(panel, ordered: .above)
+        panel.alphaValue = 1
+        panel.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            panel.animator().setFrame(target, display: true)
+        }
         refresh()
-        panel.center()
-        panel.makeKeyAndOrderFront(nil)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
+    func close() {
+        guard isOpen else { return }
+        isOpen = false
+        timer?.invalidate()
+        timer = nil
+        let frame = panel.frame
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.18
+            panel.animator().setFrame(NSRect(x: frame.minX, y: frame.minY, width: 0, height: frame.height), display: true)
+        }, completionHandler: { [weak self] in
+            guard let self = self else { return }
+            self.parent?.removeChildWindow(self.panel)
+            self.panel.orderOut(nil)
+        })
+    }
+
     func refresh() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let session = CodexActivity.latest(now: Date().timeIntervalSince1970)
-            DispatchQueue.main.async { self?.apply(session) }
+            let sessions = CodexActivity.list(now: Date().timeIntervalSince1970)
+            DispatchQueue.main.async { self?.apply(sessions) }
         }
     }
 
-    private func apply(_ session: CodexActivity.Session?) {
-        guard let session = session else {
-            stateLabel.stringValue = L("Codex: zatím žádná aktivita")
-            idLabel.stringValue = ""
-            sessionID = ""
-            steps.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            openTerminal.isEnabled = false
-            return
+    private func apply(_ sessions: [CodexActivity.Session]) {
+        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        empty.stringValue = sessions.isEmpty ? L("Zatím žádná aktivita za posledních 24 h.") : ""
+        for session in sessions {
+            let row = ActivityRow(session)
+            list.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -16).isActive = true
         }
-        sessionID = session.id
-        openTerminal.isEnabled = true
-        stateLabel.stringValue = [
-            "running": L("● Běží"), "done": L("✓ Dokončeno"),
-            "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")
-        ][session.state] ?? session.state
-        stateLabel.textColor = session.state == "aborted" ? .systemRed : session.state == "running" ? .systemGreen : .labelColor
-        idLabel.stringValue = session.id
-        steps.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for step in session.steps {
-            let line = NSTextField(labelWithString: "")
-            line.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-            line.lineBreakMode = .byTruncatingTail
-            line.maximumNumberOfLines = 2
-            line.preferredMaxLayoutWidth = 320
-            line.attributedStringValue = NSAttributedString(string: "\(icon(step.kind))  \(step.text)", attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: color(step.kind)])
-            steps.addArrangedSubview(line)
-        }
-    }
-
-    private func icon(_ kind: CodexActivity.Kind) -> String {
-        switch kind {
-        case .running: return "●"
-        case .waiting: return "◐"
-        case .error: return "✖"
-        case .done: return "✓"
-        case .info: return "•"
-        }
-    }
-
-    private func color(_ kind: CodexActivity.Kind) -> NSColor {
-        switch kind {
-        case .running: return .systemGreen
-        case .waiting: return .systemYellow
-        case .error: return .systemRed
-        case .done: return .tertiaryLabelColor
-        case .info: return .labelColor
-        }
-    }
-
-    @objc private func openInCodex() {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") else {
-            stateLabel.stringValue = L("Aplikace Codex nebyla nalezena.")
-            return
-        }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-    }
-
-    /// Opens Terminal and runs `codex resume <id>`. The command is also copied, so it can be pasted if Terminal refuses.
-    @objc private func openInTerminal() {
-        guard !sessionID.isEmpty else { return }
-        let command = "codex resume \(sessionID)"
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-        let script = NSAppleScript(source: "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell")
-        var error: NSDictionary?
-        script?.executeAndReturnError(&error)
-        if error != nil { stateLabel.stringValue = L("Příkaz je zkopírován: vložte ho do Terminálu.") }
     }
 }
 
@@ -2173,6 +2298,14 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-hist
     let data = CodexUsage.snapshot(payload, now: now)
     CodexHistory.record(data, now: now)
     let items = CodexHistory.load().map { ["t": $0.t, "five": $0.five as Any, "week": $0.week as Any] as [String: Any] }
+    print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-list" {
+    let args = CommandLine.arguments
+    let items = CodexActivity.list(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0).map { session -> [String: Any] in
+        ["id": session.id, "title": session.title, "state": session.state, "last": session.steps.last?.text ?? ""]
+    }
     print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)
 }
