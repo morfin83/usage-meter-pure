@@ -3,7 +3,7 @@
 Malý nativní panel pro macOS (lišta nabídek a plovoucí panel; Apple Silicon, macOS 13+). Ukazuje zbývající limity Codexu a Claude vedle lokálního zatížení CPU, jader, paměti, GPU a sítě.
 
 - Bundle identifier: `cz.pure.usagemeter`
-- Aktuální verze: 0.6.2 build 13 (zatím nevydáno; instalace z DMG lokálně)
+- Aktuální verze: 0.6.2 build 14 (zatím nevydáno; instalace z DMG lokálně)
 - Naposledy vydáno: 0.6.0 build 8; pre-release [v0.6.1-rc3](https://github.com/morfin83/usage-meter-pure/releases/tag/v0.6.1-rc3) (viz [RELEASES.md](RELEASES.md))
 - Jazyky: čeština a angličtina
 - Licence: MIT ([LICENSE](LICENSE)); licence třetích stran v [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
@@ -45,7 +45,7 @@ Při prvním spuštění si aplikace sama nastaví status line v `~/.claude/sett
 ```sh
 python3 -m unittest discover -s tests -v
 sh scripts/build_macos.sh /cesta/k/prazdne/slozce
-sh scripts/make_dmg.sh "/cesta/k/Usage Meter Pure.app" /cesta/k/vystupni/slozce Usage-Meter-Pure-0.6.1-build13
+sh scripts/make_dmg.sh "/cesta/k/Usage Meter Pure.app" /cesta/k/vystupni/slozce Usage-Meter-Pure-0.6.1-build14
 ```
 
 Testy kompilují Swift přes `xcrun swiftc`, Command Line Tools tedy potřebuje jen sestavovací Mac. Koncový uživatel je nepotřebuje.

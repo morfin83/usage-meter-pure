@@ -2,6 +2,14 @@
 
 Only facts that were checked are listed here. Checksums are SHA-256 of the distributed DMG.
 
+## 0.6.2 build 14 — installed locally, release pending approval
+
+- Claude "Obnovit Claude ↻" now runs in the background: Claude Code starts in a pseudo-terminal in the app folder, no Terminal window and no Automation prompt. Enter answers the one-time browser-tools dialog; the run ends once the status line has written a fresh reading. Cost confirmation kept.
+- Build 13 changes unchanged (Codex activity window, reset countdowns, Codex token totals).
+- DMG: `Usage-Meter-Pure-0.6.2-build14-arm64.dmg`, SHA-256 `fc51ed36b03e76484c310c58a04515f719033551d42e9403661e3fe37b8a9889`.
+- Verified: unit tests (61) pass; a real background refresh updated the status line within about 3 seconds and left no process; build, signature and DMG verified; installed from the DMG, old version removed.
+- Not verified: clean macOS 13+ machine; the first refresh on a fresh account (the app folder must be trusted once).
+
 ## 0.6.2 build 13 — installed locally, release pending approval
 
 - Codex activity window ("Aktivita"): state, session id, last steps, buttons to open Codex or run `codex resume` in Terminal.
