@@ -1,6 +1,6 @@
 # Usage Meter Pure — instalace
 
-Verze 0.6.2 build 15 (zatím nevydáno).
+Verze 0.7.0 build 16 (zatím nevydáno).
 
 ## Co potřebujete
 
@@ -13,14 +13,14 @@ Python, Homebrew ani OpenAI API klíč nejsou potřeba. Terminál také ne (krom
 
 ## Instalace
 
-1. Otevřete DMG `Usage-Meter-Pure-0.6.1-build15` (soubor dostanete od autora; zatím není veřejně vydán).
+1. Otevřete DMG `Usage-Meter-Pure-0.6.1-build16` (soubor dostanete od autora; zatím není veřejně vydán).
 2. Přetáhněte Usage Meter Pure do složky Aplikace (Applications).
 3. Vysuňte DMG.
 4. Spusťte Usage Meter Pure ze složky Aplikace.
 
-Soubor: `Usage-Meter-Pure-0.6.1-build15-arm64.dmg`
+Soubor: `Usage-Meter-Pure-0.6.1-build16-arm64.dmg`
 
-SHA-256: 1270624aed43779c95fef18f5eabc9238ba50d79b490b85ed25f378261542991
+SHA-256: 6a47be595d07a62cd7d10478a2026daff4dc64e515261636408d4edeedee6908
 
 ## Pokud macOS aplikaci zablokuje
 

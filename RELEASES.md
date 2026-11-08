@@ -2,11 +2,11 @@
 
 Only facts that were checked are listed here. Checksums are SHA-256 of the distributed DMG.
 
-## 0.6.2 build 15 — installed locally, release pending approval
+## 0.7.0 build 16 — installed locally, release pending approval
 
 - Claude line explains why there are no fresh data and offers the repair on the same line: "Připojit ↻" or "Obnovit ↻"; afterwards the data are read again.
 - Fixed the stuck "loading" state: the Claude token scan (about 400 MB of logs, 7.6 s per refresh) now runs after the limits are shown and is cached for five minutes.
-- DMG: `Usage-Meter-Pure-0.6.2-build15-arm64.dmg`, SHA-256 `1270624aed43779c95fef18f5eabc9238ba50d79b490b85ed25f378261542991`.
+- DMG: `Usage-Meter-Pure-0.6.2-build16-arm64.dmg`, SHA-256 `6a47be595d07a62cd7d10478a2026daff4dc64e515261636408d4edeedee6908`.
 - Verified: 71 unit tests; the repair states in an isolated copy; installed from the DMG, old version removed.
 - Not verified: the repair "Připojit" on the real user settings (only in an isolated copy); clean macOS 13+ machine.
 
