@@ -33,4 +33,8 @@ Stavy: DONE = hotovo a kryto kontrolou v repozitáři; PARTIAL = hotovo, ne zcel
 | Otevření vlákna na konkrétním místě (ne jen na vlákně) | NOT POSSIBLE | aplikace nemá odkaz na konkrétní zprávu; otevře se vlákno |
 | Diagnostika připojení Claude s tlačítkem opravy na řádku (Připojit / Obnovit) a opakované načtení po opravě | DONE | `test_claude_health.py`; ruční ověření |
 | Token součty Claude z logů jsou počítány s cache 5 min a až po zobrazení limitů | DONE | `test_claude_sources.py`; měření 7,6 s na 400 MB logů |
+| Šuflík Claude (aktivity Claude Code, model, stav), hlavičky „Codex · aktivity" a „Claude · aktivity" | DONE | `test_claude_list.py`; ruční ověření |
+| Oba šuflíky současně: druhý vyjede na volnou stranu, hlavní panel se případně posune | DONE | ruční ověření |
+| Nastavení šířky (260/300/360) a strany (vpravo/vlevo) v menu „Šuflíky" | DONE | ruční ověření; uloženo v předvolbách |
+| Klávesové zkratky: ⌘W zavřít panel, ⌘M minimalizovat (skrýt), ⌘1 Codex, ⌘2 Claude, ⌘3 oba, ⌘R obnovit, ⌘Q ukončit | DONE | ověřeno osascriptem |
 

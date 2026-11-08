@@ -291,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var positioned = false
     var resizing = false
     var userClosed = false
+    weak var drawerMenu: NSMenu?
     var expandedWindow = false
     let sampler = SystemSampler()
     var panel: OverlayPanel!
@@ -317,7 +318,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let codexTokensLabel = NSTextField(labelWithString: L("Tokeny z Codex logů: načítání…"))
     let codexTitle = NSTextField(labelWithString: "Codex")
     let codexActivityButton = ClickableLabel(labelWithString: "")
-    lazy var codexActivity = CodexDrawer()
+    let claudeActivityButton = ClickableLabel(labelWithString: "")
+    lazy var codexDrawer = ActivityDrawer(source: .codex)
+    lazy var claudeDrawer = ActivityDrawer(source: .claude)
     let claudeTitle = NSTextField(labelWithString: "Claude")
     let claudeFive = GaugeRow(L("Claude · zbývá 5 h"), key: "claude.5h", tint: Palette.claude, series: \.five)
     let claudeWeek = GaugeRow(L("Claude · zbývá týden"), key: "claude.week", tint: Palette.claude, series: \.week)
@@ -377,7 +380,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle: L("Ukončit Usage Meter"), action: #selector(quit), keyEquivalent: "q")
         for item in menu.items { item.target = self }
         menu.items[2].state = pinnedEverywhere ? .on : .off
+        menu.insertItem(buildDrawerMenu(), at: 3)
+        refreshDrawerMenu()
         statusItem.menu = menu
+        NSApp.mainMenu = buildMainMenu()
     }
 
     func createPanel() {
@@ -487,10 +493,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         codexActivityButton.stringValue = L("Aktivita ▸")
         codexActivityButton.font = .systemFont(ofSize: 10, weight: .medium)
         codexActivityButton.textColor = .controlAccentColor
-        codexActivityButton.onClick = { [weak self] in
-            guard let self = self else { return }
-            self.codexActivity.toggle(parent: self.panel)
-        }
+        codexActivityButton.onClick = { [weak self] in self?.toggleDrawer(.codex) }
+        claudeActivityButton.stringValue = L("Aktivita ▸")
+        claudeActivityButton.font = .systemFont(ofSize: 10, weight: .medium)
+        claudeActivityButton.textColor = .controlAccentColor
+        claudeActivityButton.onClick = { [weak self] in self?.toggleDrawer(.claude) }
         let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
         codexHeader.orientation = .horizontal
         claudeRefreshButton.stringValue = L("Obnovit Claude ↻")
@@ -501,7 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         claudeRepairButton.textColor = .systemOrange
         claudeRepairButton.isHidden = true
         claudeRepairButton.onClick = { [weak self] in self?.repairClaude() }
-        let claudeHeader = NSStackView(views: [claudeTitle, NSView(), claudeRefreshButton])
+        let claudeHeader = NSStackView(views: [claudeTitle, NSView(), claudeActivityButton, claudeRefreshButton])
         claudeHeader.orientation = .horizontal
         aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeHeader, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeRepairButton, claudeSetupLabel], spacing: 12)
         for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
@@ -664,6 +671,140 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func toggleAI() { aiBody.isHidden = aiSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleShow() { body.isHidden = showSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleDetails() { details.isHidden = detailSwitch.state == .off; saveSwitches(); resize() }
+    // MARK: - Drawers: placement, width, side and keyboard
+
+    var drawerWidth: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: "drawer.width")
+        return saved > 0 ? CGFloat(saved) : 300
+    }
+
+    var drawerSide: DrawerSide {
+        DrawerSide(rawValue: UserDefaults.standard.string(forKey: "drawer.side") ?? "") ?? .right
+    }
+
+    func drawer(_ source: ActivityDrawer.Source) -> ActivityDrawer {
+        source == .codex ? codexDrawer : claudeDrawer
+    }
+
+    func toggleDrawer(_ source: ActivityDrawer.Source) {
+        let target = drawer(source)
+        if target.isOpen { target.close() } else { openDrawer(target) }
+    }
+
+    /// The first open drawer uses the chosen side; a second one goes to the free side. When a side has no room
+    /// on the screen, the main panel moves so that the drawer fits next to it.
+    func openDrawer(_ target: ActivityDrawer) {
+        guard !target.isOpen else { return }
+        let others = [codexDrawer, claudeDrawer].filter { $0 !== target && $0.isOpen }
+        var side: DrawerSide = others.first.map { $0.side == .right ? .left : .right } ?? drawerSide
+        let width = drawerWidth
+        let screen = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        func room(_ side: DrawerSide) -> Bool {
+            side == .right ? panel.frame.maxX + 6 + width <= screen.maxX : panel.frame.minX - 6 - width >= screen.minX
+        }
+        if !room(side) {
+            if others.isEmpty && room(side == .right ? .left : .right) {
+                side = side == .right ? .left : .right
+            } else {
+                // Shift the main panel so that the drawer fits on the wanted side.
+                var origin = panel.frame.origin
+                if side == .right { origin.x -= (panel.frame.maxX + 6 + width) - screen.maxX }
+                else { origin.x += (screen.minX) - (panel.frame.minX - 6 - width) }
+                panel.setFrameOrigin(origin)
+            }
+        }
+        target.open(parent: panel, side: side, width: width)
+    }
+
+    @objc func showCodexDrawer() { openDrawer(codexDrawer) }
+    @objc func showClaudeDrawer() { openDrawer(claudeDrawer) }
+    @objc func showBothDrawers() {
+        openDrawer(codexDrawer)
+        openDrawer(claudeDrawer)
+    }
+
+    @objc func setDrawerWidth(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(Double(sender.tag), forKey: "drawer.width")
+        refreshDrawerMenu()
+    }
+
+    @objc func setDrawerSide(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(sender.representedObject as? String ?? "right", forKey: "drawer.side")
+        refreshDrawerMenu()
+    }
+
+    /// Keeps the check marks of the width and side items in line with the saved values.
+    func refreshDrawerMenu() {
+        guard let menu = drawerMenu else { return }
+        for item in menu.items {
+            if let sub = item.submenu {
+                for entry in sub.items {
+                    if entry.action == #selector(setDrawerWidth(_:)) { entry.state = Int(drawerWidth) == entry.tag ? .on : .off }
+                    if entry.action == #selector(setDrawerSide(_:)) { entry.state = (entry.representedObject as? String) == drawerSide.rawValue ? .on : .off }
+                }
+            }
+        }
+    }
+
+    /// Hides the main panel and both drawers. Opening the panel again from the status item brings it back.
+    @objc func hidePanel() {
+        codexDrawer.close()
+        claudeDrawer.close()
+        userClosed = true
+        panel.orderOut(nil)
+    }
+
+    func buildMainMenu() -> NSMenu {
+        let main = NSMenu()
+        let app = NSMenuItem()
+        main.addItem(app)
+        let menu = NSMenu(title: "Usage Meter Pure")
+        menu.addItem(withTitle: L("Zavřít panel"), action: #selector(hidePanel), keyEquivalent: "w")
+        menu.addItem(withTitle: L("Minimalizovat"), action: #selector(hidePanel), keyEquivalent: "m")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L("Aktivity Codexu"), action: #selector(showCodexDrawer), keyEquivalent: "1")
+        menu.addItem(withTitle: L("Aktivity Claude"), action: #selector(showClaudeDrawer), keyEquivalent: "2")
+        menu.addItem(withTitle: L("Oba šuflíky"), action: #selector(showBothDrawers), keyEquivalent: "3")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L("Obnovit limity"), action: #selector(refresh), keyEquivalent: "r")
+        menu.addItem(withTitle: L("Ukončit Usage Meter"), action: #selector(quit), keyEquivalent: "q")
+        for item in menu.items { item.target = self }
+        app.submenu = menu
+        return main
+    }
+
+    func buildDrawerMenu() -> NSMenuItem {
+        let root = NSMenuItem(title: L("Šuflíky"), action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: L("Šuflíky"))
+        menu.addItem(withTitle: L("Aktivity Codexu"), action: #selector(showCodexDrawer), keyEquivalent: "")
+        menu.addItem(withTitle: L("Aktivity Claude"), action: #selector(showClaudeDrawer), keyEquivalent: "")
+        menu.addItem(withTitle: L("Oba šuflíky"), action: #selector(showBothDrawers), keyEquivalent: "")
+        menu.addItem(.separator())
+        let width = NSMenuItem(title: L("Šířka"), action: nil, keyEquivalent: "")
+        let widths = NSMenu()
+        for (title, value) in [(L("Úzký"), 260), (L("Střední"), 300), (L("Široký"), 360)] {
+            let item = NSMenuItem(title: title, action: #selector(setDrawerWidth(_:)), keyEquivalent: "")
+            item.tag = value
+            widths.addItem(item)
+        }
+        width.submenu = widths
+        menu.addItem(width)
+        let side = NSMenuItem(title: L("Strana"), action: nil, keyEquivalent: "")
+        let sides = NSMenu()
+        for (title, value) in [(L("Vpravo"), "right"), (L("Vlevo"), "left")] {
+            let item = NSMenuItem(title: title, action: #selector(setDrawerSide(_:)), keyEquivalent: "")
+            item.representedObject = value
+            sides.addItem(item)
+        }
+        side.submenu = sides
+        menu.addItem(side)
+        for item in menu.items { if item.action != nil && item.target == nil { item.target = self } }
+        for item in widths.items + sides.items { item.target = self }
+        root.submenu = menu
+        drawerMenu = menu
+        return root
+    }
+
     @objc func toggleFromMenu() {
         userClosed = false
         if panel.isMiniaturized { panel.deminiaturize(nil) }
@@ -1516,39 +1657,49 @@ final class ClickableLabel: NSTextField {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
-/// One running item in the drawer. A click opens the desktop Codex app at that thread (`codex://threads/<id>`).
+/// One item of a drawer: a Codex thread or a Claude Code session.
+struct DrawerItem {
+    let id: String
+    let title: String
+    let state: String          // "running", "done", "aborted", "idle"
+    let meta: String           // kind and model, e.g. "workspace · gpt-6-astra · ultra"
+    let last: String           // last step
+    let action: () -> Void
+}
+
+enum DrawerSide: String {
+    case left, right
+}
+
+/// One item row. A click runs the item's action (open the thread, or copy the resume command for Claude Code).
 final class ActivityRow: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let stateLabel = NSTextField(labelWithString: "")
     private let stepLabel = NSTextField(labelWithString: "")
-    private let sessionID: String
+    private let action: () -> Void
     private var hovering = false { didSet { layer?.backgroundColor = hovering ? NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor : NSColor.clear.cgColor } }
 
-    init(_ session: CodexActivity.Session) {
-        sessionID = session.id
+    init(_ item: DrawerItem) {
+        action = item.action
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
-        titleLabel.stringValue = session.title
+        titleLabel.stringValue = item.title
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let state = ["running": L("● Běží"), "done": L("✓ Dokončeno"), "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")][session.state] ?? session.state
-        let kind = ["chat": L("chat"), "workspace": L("workspace"), "cli": L("Codex CLI"), "subagent": L("subagent")][session.kind] ?? ""
-        let model = session.model.isEmpty ? L("model neznámý") : session.model
-        let parts = [state, kind, model].filter { !$0.isEmpty }
-        stateLabel.stringValue = parts.joined(separator: " · ")
+        let state = ["running": L("● Běží"), "done": L("✓ Dokončeno"), "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")][item.state] ?? item.state
+        stateLabel.stringValue = [state, item.meta].filter { !$0.isEmpty }.joined(separator: " · ")
         stateLabel.font = .systemFont(ofSize: 10, weight: .medium)
-        stateLabel.textColor = session.state == "running" ? .systemGreen : session.state == "aborted" ? .systemRed : .secondaryLabelColor
-        let last = session.steps.last
-        stepLabel.stringValue = last?.text ?? ""
+        stateLabel.textColor = item.state == "running" ? .systemGreen : item.state == "aborted" ? .systemRed : .secondaryLabelColor
+        stateLabel.lineBreakMode = .byTruncatingTail
+        stateLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        stepLabel.stringValue = item.last
         stepLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         stepLabel.textColor = .secondaryLabelColor
         stepLabel.lineBreakMode = .byTruncatingTail
         stepLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let top = NSStackView(views: [stateLabel, NSView()])
-        top.orientation = .horizontal
-        let stack = NSStackView(views: [titleLabel, top, stepLabel])
+        let stack = NSStackView(views: [titleLabel, stateLabel, stepLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 3
@@ -1558,12 +1709,11 @@ final class ActivityRow: NSView {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            top.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
-            stepLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
-            titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20)
+            titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            stateLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            stepLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20)
         ])
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
-        toolTip = L("Otevřít v Codexu")
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1571,23 +1721,29 @@ final class ActivityRow: NSView {
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        if let url = URL(string: "codex://threads/\(sessionID)") { NSWorkspace.shared.open(url) }
-    }
+    override func mouseDown(with event: NSEvent) { action() }
 }
 
-/// Drawer with the running Codex items. It slides out to the right of the main panel and stays attached to it.
-final class CodexDrawer: NSObject {
+/// A drawer that lists recent activity of one source (Codex or Claude). It slides out beside the main panel.
+final class ActivityDrawer: NSObject {
+    enum Source: String {
+        case codex, claude
+    }
+
+    let source: Source
     private let panel: NSPanel
     private let list = NSStackView()
     private let empty = NSTextField(labelWithString: "")
+    private let note = NSTextField(labelWithString: "")
     private var timer: Timer?
     private weak var parent: NSWindow?
-    static let width: CGFloat = 300
+    private let header = NSTextField(labelWithString: "")
     private(set) var isOpen = false
+    private(set) var side: DrawerSide = .right
+    private var width: CGFloat = 300
 
-    override init() {
+    init(source: Source) {
+        self.source = source
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 0, height: 300),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -1596,8 +1752,6 @@ final class CodexDrawer: NSObject {
         panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
-        panel.contentMinSize = NSSize(width: CodexDrawer.width, height: 120)
-        panel.contentMaxSize = NSSize(width: CodexDrawer.width, height: 4000)
         let background = NSVisualEffectView()
         background.material = .hudWindow
         background.blendingMode = .behindWindow
@@ -1607,15 +1761,22 @@ final class CodexDrawer: NSObject {
         background.layer?.masksToBounds = true
         panel.contentView = background
 
-        let title = NSTextField(labelWithString: L("Aktivity Codexu za 24 h"))
-        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        // The header names the source, so it is clear which drawer this is.
+        header.stringValue = source == .codex ? L("Codex · aktivity za 24 h") : L("Claude · aktivity za 24 h")
+        header.font = .systemFont(ofSize: 12, weight: .bold)
+        header.textColor = source == .codex ? Palette.quota : Palette.claude
         let close = ClickableLabel(labelWithString: "✕")
         close.font = .systemFont(ofSize: 12, weight: .medium)
         close.textColor = .secondaryLabelColor
         close.onClick = { [weak self] in self?.close() }
-        let header = NSStackView(views: [title, NSView(), close])
-        header.orientation = .horizontal
-        header.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 6, right: 12)
+        let headerRow = NSStackView(views: [header, NSView(), close])
+        headerRow.orientation = .horizontal
+        headerRow.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 4, right: 12)
+        note.font = .systemFont(ofSize: 10)
+        note.textColor = .secondaryLabelColor
+        note.maximumNumberOfLines = 2
+        note.lineBreakMode = .byWordWrapping
+        note.preferredMaxLayoutWidth = 260
 
         list.orientation = .vertical
         list.alignment = .leading
@@ -1640,7 +1801,7 @@ final class CodexDrawer: NSObject {
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
         ])
 
-        let stack = NSStackView(views: [header, empty, scroll])
+        let stack = NSStackView(views: [headerRow, note, empty, scroll])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
@@ -1650,28 +1811,25 @@ final class CodexDrawer: NSObject {
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor), stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
             stack.topAnchor.constraint(equalTo: background.topAnchor), stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            header.widthAnchor.constraint(equalTo: stack.widthAnchor)
+            headerRow.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
     }
 
-    /// Opens the drawer next to the parent window (or closes it when open).
-    func toggle(parent: NSWindow) {
-        isOpen ? close() : open(parent: parent)
-    }
-
-    func open(parent: NSWindow) {
+    /// Opens the drawer on the given side of the parent window, with the chosen width.
+    func open(parent: NSWindow, side: DrawerSide, width: CGFloat) {
         guard !isOpen else { return }
         isOpen = true
         self.parent = parent
+        self.side = side
+        self.width = width
+        panel.contentMinSize = NSSize(width: width, height: 120)
+        panel.contentMaxSize = NSSize(width: width, height: 4000)
         let frame = parent.frame
-        let screen = parent.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
-        // Right of the panel when there is room, otherwise on its left side.
-        let rightSpace = screen.maxX - frame.maxX
-        let x = rightSpace >= CodexDrawer.width + 6 ? frame.maxX + 6 : frame.minX - CodexDrawer.width - 6
-        let target = NSRect(x: x, y: frame.minY, width: CodexDrawer.width, height: frame.height)
+        // The caller has already made room for the drawer on this side.
+        let x = side == .right ? frame.maxX + 6 : frame.minX - width - 6
+        let target = NSRect(x: x, y: frame.minY, width: width, height: frame.height)
         panel.setFrame(NSRect(x: frame.minX, y: frame.minY, width: 0, height: frame.height), display: false)
         parent.addChildWindow(panel, ordered: .above)
-        panel.alphaValue = 1
         panel.orderFront(nil)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.22
@@ -1699,20 +1857,127 @@ final class CodexDrawer: NSObject {
     }
 
     func refresh() {
+        let source = self.source
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let sessions = CodexActivity.list(now: Date().timeIntervalSince1970)
-            DispatchQueue.main.async { self?.apply(sessions) }
+            let items: [DrawerItem]
+            switch source {
+            case .codex:
+                items = CodexActivity.list(now: Date().timeIntervalSince1970).map { session in
+                    DrawerItem(id: session.id, title: session.title, state: session.state,
+                               meta: [session.kind == "chat" ? L("chat") : session.kind == "workspace" ? L("workspace") : session.kind == "cli" ? L("Codex CLI") : L("subagent"),
+                                      session.model.isEmpty ? L("model neznámý") : session.model].joined(separator: " · "),
+                               last: session.steps.last?.text ?? "") {
+                        if let url = URL(string: "codex://threads/\(session.id)") { NSWorkspace.shared.open(url) }
+                    }
+                }
+            case .claude:
+                items = ClaudeActivity.list(now: Date().timeIntervalSince1970).map { session in
+                    DrawerItem(id: session.id, title: session.title, state: session.state,
+                               meta: [L("Claude Code"), session.model.isEmpty ? L("model neznámý") : session.model].joined(separator: " · "),
+                               last: session.steps.last?.text ?? "") {
+                        let command = "claude --resume \(session.id)"
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(command, forType: .string)
+                        DispatchQueue.main.async { self?.showNote(L("Příkaz zkopírován: vložte do Terminálu.")) }
+                    }
+                }
+            }
+            DispatchQueue.main.async { self?.apply(items) }
         }
     }
 
-    private func apply(_ sessions: [CodexActivity.Session]) {
+    private func showNote(_ text: String) {
+        note.stringValue = text
+    }
+
+    private func apply(_ items: [DrawerItem]) {
         list.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        empty.stringValue = sessions.isEmpty ? L("Zatím žádná aktivita za posledních 24 h.") : ""
-        for session in sessions {
-            let row = ActivityRow(session)
+        empty.stringValue = items.isEmpty ? L("Zatím žádná aktivita za posledních 24 h.") : ""
+        for item in items {
+            let row = ActivityRow(item)
             list.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -16).isActive = true
         }
+    }
+}
+
+/// Recent Claude Code sessions (`~/.claude/projects/<project>/<id>.jsonl`), in the same shape as Codex items.
+enum ClaudeActivity {
+    private static let lock = NSLock()
+    private static var titles: [String: (modified: Double, title: String)] = [:]
+
+    static func list(root: URL = ClaudeUsage.projects, now: Double, limit: Int = 40) -> [CodexActivity.Session] {
+        guard let walker = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [] }
+        var files: [(url: URL, modified: Double)] = []
+        for case let url as URL in walker where url.pathExtension == "jsonl" && !url.path.contains("/subagents/") {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            if now - modified <= 24 * 3600 { files.append((url, modified)) }
+        }
+        files.sort { $0.modified > $1.modified }
+        return files.prefix(limit).compactMap { file in
+            guard let lines = CodexActivity.tailLines(of: file.url) else { return nil }
+            return parse(lines: lines, url: file.url, modified: file.modified, now: now)
+        }
+    }
+
+    static func parse(lines: [Data.SubSequence], url: URL, modified: Double, now: Double) -> CodexActivity.Session {
+        var steps: [CodexActivity.Step] = []
+        var model = ""
+        var lastType = ""
+        for line in lines {
+            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            let type = object["type"] as? String ?? ""
+            let time = ClaudeUsage.parseTime(object["timestamp"] as? String ?? "") ?? modified
+            lastType = type
+            guard let message = object["message"] as? [String: Any] else { continue }
+            if type == "assistant", let name = message["model"] as? String, name != "<synthetic>" { model = name }
+            guard type == "assistant", let content = message["content"] as? [[String: Any]] else { continue }
+            for item in content {
+                if item["type"] as? String == "tool_use" {
+                    let input = item["input"] as? [String: Any] ?? [:]
+                    let detail = (input["command"] as? String) ?? (input["file_path"] as? String) ?? (input["pattern"] as? String) ?? (input["description"] as? String) ?? ""
+                    let name = item["name"] as? String ?? "nástroj"
+                    steps.append(CodexActivity.Step(time: time, kind: .running, text: CodexActivity.short(detail.isEmpty ? name : "\(name): \(detail)")))
+                } else if item["type"] as? String == "text", let text = item["text"] as? String, !text.isEmpty {
+                    steps.append(CodexActivity.Step(time: time, kind: .info, text: CodexActivity.short(text)))
+                }
+            }
+        }
+        let state = (now - modified < 120 && lastType != "summary") ? "running" : "done"
+        let id = url.deletingPathExtension().lastPathComponent
+        return CodexActivity.Session(id: id, title: title(of: url, modified: modified), kind: "Claude Code",
+                                     model: model, state: state, updated: modified, steps: Array(steps.suffix(12)))
+    }
+
+    /// First request of the user in the session, cached per file and modification time.
+    static func title(of url: URL, modified: Double) -> String {
+        lock.lock()
+        if let cached = titles[url.path], cached.modified == modified { lock.unlock(); return cached.title }
+        lock.unlock()
+        var found = L("Bez názvu")
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            let head = (try? handle.read(upToCount: 128 * 1024)) ?? Data()
+            try? handle.close()
+            for line in head.split(separator: 0x0A) {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      object["type"] as? String == "user",
+                      let message = object["message"] as? [String: Any] else { continue }
+                var text = ""
+                if let plain = message["content"] as? String { text = plain }
+                else if let items = message["content"] as? [[String: Any]] {
+                    text = items.compactMap { $0["text"] as? String }.joined(separator: " ")
+                }
+                let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                if oneLine.isEmpty || oneLine.hasPrefix("<") { continue }
+                found = oneLine.count > 70 ? String(oneLine.prefix(70)) + "…" : oneLine
+                break
+            }
+        }
+        lock.lock()
+        titles[url.path] = (modified, found)
+        lock.unlock()
+        return found
     }
 }
 
@@ -2422,6 +2687,14 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-hist
     let data = CodexUsage.snapshot(payload, now: now)
     CodexHistory.record(data, now: now)
     let items = CodexHistory.load().map { ["t": $0.t, "five": $0.five as Any, "week": $0.week as Any] as [String: Any] }
+    print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--claude-list" {
+    let args = CommandLine.arguments
+    let items = ClaudeActivity.list(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0).map { session -> [String: Any] in
+        ["id": session.id, "title": session.title, "kind": session.kind, "model": session.model, "state": session.state, "last": session.steps.last?.text ?? ""]
+    }
     print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)
 }
