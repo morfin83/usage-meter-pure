@@ -2,6 +2,32 @@
 
 Only facts that were checked are listed here. Checksums are SHA-256 of the distributed DMG.
 
+## 0.7.0 build 16 — installed locally, release pending approval
+
+- Drawers for Codex and Claude Code, both can be open; the second goes to the free side, the main panel moves if needed.
+- Width and side of the drawers in the "Šuflíky" menu; keyboard shortcuts ⌘W, ⌘M, ⌘1–⌘3, ⌘R, ⌘Q.
+- Thread kind and model in the Codex drawer; Claude repair button on its line; faster Claude token scan (cached).
+- Main panel without scrolling; drawers keep their scrolling.
+- DMG: `Usage-Meter-Pure-0.7.0-build16-arm64.dmg`, SHA-256 `6a47be595d07a62cd7d10478a2026daff4dc64e515261636408d4edeedee6908`.
+- Verified: 74 unit tests; drawers, placement and shortcuts on the running app.
+- Not verified: clean macOS 13+ machine; the first Claude background refresh on another account.
+
+## 0.6.2 build 15 — installed locally, release pending approval
+
+- Claude line explains why there are no fresh data and offers the repair on the same line: "Připojit ↻" or "Obnovit ↻"; afterwards the data are read again.
+- Fixed the stuck "loading" state: the Claude token scan (about 400 MB of logs, 7.6 s per refresh) now runs after the limits are shown and is cached for five minutes.
+- DMG: `Usage-Meter-Pure-0.6.2-build16-arm64.dmg`, SHA-256 `6a47be595d07a62cd7d10478a2026daff4dc64e515261636408d4edeedee6908`.
+- Verified: 71 unit tests; the repair states in an isolated copy; installed from the DMG, old version removed.
+- Not verified: the repair "Připojit" on the real user settings (only in an isolated copy); clean macOS 13+ machine.
+
+## 0.6.2 build 14 — installed locally, release pending approval
+
+- Claude "Obnovit Claude ↻" now runs in the background: Claude Code starts in a pseudo-terminal in the app folder, no Terminal window and no Automation prompt. Enter answers the one-time browser-tools dialog; the run ends once the status line has written a fresh reading. Cost confirmation kept.
+- Build 13 changes unchanged (Codex activity window, reset countdowns, Codex token totals).
+- DMG: `Usage-Meter-Pure-0.6.2-build14-arm64.dmg`, SHA-256 `fc51ed36b03e76484c310c58a04515f719033551d42e9403661e3fe37b8a9889`.
+- Verified: unit tests (61) pass; a real background refresh updated the status line within about 3 seconds and left no process; build, signature and DMG verified; installed from the DMG, old version removed.
+- Not verified: clean macOS 13+ machine; the first refresh on a fresh account (the app folder must be trusted once).
+
 ## 0.6.2 build 13 — installed locally, release pending approval
 
 - Codex activity window ("Aktivita"): state, session id, last steps, buttons to open Codex or run `codex resume` in Terminal.

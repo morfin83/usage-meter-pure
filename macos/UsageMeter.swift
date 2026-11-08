@@ -291,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var positioned = false
     var resizing = false
     var userClosed = false
+    weak var drawerMenu: NSMenu?
     var expandedWindow = false
     let sampler = SystemSampler()
     var panel: OverlayPanel!
@@ -317,7 +318,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let codexTokensLabel = NSTextField(labelWithString: L("Tokeny z Codex logů: načítání…"))
     let codexTitle = NSTextField(labelWithString: "Codex")
     let codexActivityButton = ClickableLabel(labelWithString: "")
-    lazy var codexActivity = CodexActivityWindow()
+    let claudeActivityButton = ClickableLabel(labelWithString: "")
+    lazy var codexDrawer = ActivityDrawer(source: .codex)
+    lazy var claudeDrawer = ActivityDrawer(source: .claude)
     let claudeTitle = NSTextField(labelWithString: "Claude")
     let claudeFive = GaugeRow(L("Claude · zbývá 5 h"), key: "claude.5h", tint: Palette.claude, series: \.five)
     let claudeWeek = GaugeRow(L("Claude · zbývá týden"), key: "claude.week", tint: Palette.claude, series: \.week)
@@ -326,6 +329,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let claudeSetupLabel = NSTextField(labelWithString: "")
     let claudeLive = NSTextField(labelWithString: "")
     let claudeRefreshButton = ClickableLabel(labelWithString: "")
+    let claudeRepairButton = ClickableLabel(labelWithString: "")
+    var claudeHealth: ClaudeHealth = .ok
+    var claudeRefreshing = false
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -374,7 +380,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle: L("Ukončit Usage Meter"), action: #selector(quit), keyEquivalent: "q")
         for item in menu.items { item.target = self }
         menu.items[2].state = pinnedEverywhere ? .on : .off
+        menu.insertItem(buildDrawerMenu(), at: 3)
+        refreshDrawerMenu()
         statusItem.menu = menu
+        NSApp.mainMenu = buildMainMenu()
     }
 
     func createPanel() {
@@ -484,16 +493,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         codexActivityButton.stringValue = L("Aktivita ▸")
         codexActivityButton.font = .systemFont(ofSize: 10, weight: .medium)
         codexActivityButton.textColor = .controlAccentColor
-        codexActivityButton.onClick = { [weak self] in self?.codexActivity.show() }
+        codexActivityButton.onClick = { [weak self] in self?.toggleDrawer(.codex) }
+        claudeActivityButton.stringValue = L("Aktivita ▸")
+        claudeActivityButton.font = .systemFont(ofSize: 10, weight: .medium)
+        claudeActivityButton.textColor = .controlAccentColor
+        claudeActivityButton.onClick = { [weak self] in self?.toggleDrawer(.claude) }
         let codexHeader = NSStackView(views: [codexTitle, NSView(), codexActivityButton])
         codexHeader.orientation = .horizontal
         claudeRefreshButton.stringValue = L("Obnovit Claude ↻")
         claudeRefreshButton.font = .systemFont(ofSize: 10, weight: .medium)
         claudeRefreshButton.textColor = .controlAccentColor
         claudeRefreshButton.onClick = { [weak self] in self?.refreshClaude() }
-        let claudeHeader = NSStackView(views: [claudeTitle, NSView(), claudeRefreshButton])
+        claudeRepairButton.font = .systemFont(ofSize: 10, weight: .medium)
+        claudeRepairButton.textColor = .systemOrange
+        claudeRepairButton.isHidden = true
+        claudeRepairButton.onClick = { [weak self] in self?.repairClaude() }
+        let claudeHeader = NSStackView(views: [claudeTitle, NSView(), claudeActivityButton, claudeRefreshButton])
         claudeHeader.orientation = .horizontal
-        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeHeader, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeHeader, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeRepairButton, claudeSetupLabel], spacing: 12)
         for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
@@ -527,8 +544,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.translatesAutoresizingMaskIntoConstraints = false
         scroll = NSScrollView()
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.hasVerticalScroller = false
+        scroll.verticalScrollElasticity = .none
         scroll.translatesAutoresizingMaskIntoConstraints = false
         canvas = NSView(frame: NSRect(x: 0, y: 0, width: 292, height: 700))
         canvas.addSubview(root)
@@ -625,30 +642,169 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if positioned && !resizing { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: "panelOrigin") }
     }
     @objc func openWebsite() { NSWorkspace.shared.open(URL(string: "https://www.studiopuresound.cz")!) }
-    /// Asks first, because a refresh is a real (small) model request. The status line only updates
-    /// inside an interactive Claude Code session, so the request runs there and the session is left open.
+    /// Asks first, because a refresh is a real (small) model request. The request runs in the background:
+    /// Claude Code is started inside a pseudo-terminal (no window, no Terminal automation), the status line
+    /// writes the fresh limits, and the session is then closed.
     func refreshClaude() {
         let alert = NSAlert()
         alert.messageText = L("Obnovit data Claude?")
-        alert.informativeText = L("Otevře se Terminál s Claude Code a pošle se jedna krátká zpráva. Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD na Haiku, víc na větším modelu). Potom Terminál můžete zavřít.")
+        alert.informativeText = L("Na pozadí se pošle jedna krátká zpráva Claude Code (model Haiku). Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD).")
         alert.addButton(withTitle: L("Obnovit"))
         alert.addButton(withTitle: L("Zrušit"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        // Runs in the app's own folder: Claude Code asks once to trust a folder, and the prompt would block the message.
-        let folder = AppSupport.directory.path.replacingOccurrences(of: "'", with: "'\\''")
-        let command = "mkdir -p '\(folder)' && cd '\(folder)' && claude \\\"Reply with the single word: ok\\\""
-        let source = "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell"
-        var error: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if error != nil {
-            claudeUpdated.stringValue = L("Terminál nelze ovládat. Povolte Usage Meter Pure v Soukromí a zabezpečení > Automatizace.")
-            claudeUpdated.textColor = .systemOrange
+        guard !claudeRefreshing else { return }
+        claudeRefreshing = true
+        claudeUpdated.stringValue = L("Claude: obnovuji data…")
+        claudeUpdated.textColor = .secondaryLabelColor
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let ok = ClaudeRefresh.run()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.claudeRefreshing = false
+                self.claudeUpdated.stringValue = ok ? L("Claude: data obnovena.") : L("Claude: obnovení se nepovedlo. Zkuste to znovu.")
+                self.claudeUpdated.textColor = ok ? .systemGreen : .systemOrange
+                self.fetchUsage()
+            }
         }
     }
 
     @objc func toggleAI() { aiBody.isHidden = aiSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleShow() { body.isHidden = showSwitch.state == .off; saveSwitches(); resize() }
     @objc func toggleDetails() { details.isHidden = detailSwitch.state == .off; saveSwitches(); resize() }
+    // MARK: - Drawers: placement, width, side and keyboard
+
+    var drawerWidth: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: "drawer.width")
+        return saved > 0 ? CGFloat(saved) : 300
+    }
+
+    var drawerSide: DrawerSide {
+        DrawerSide(rawValue: UserDefaults.standard.string(forKey: "drawer.side") ?? "") ?? .right
+    }
+
+    func drawer(_ source: ActivityDrawer.Source) -> ActivityDrawer {
+        source == .codex ? codexDrawer : claudeDrawer
+    }
+
+    func toggleDrawer(_ source: ActivityDrawer.Source) {
+        let target = drawer(source)
+        if target.isOpen { target.close() } else { openDrawer(target) }
+    }
+
+    /// The first open drawer uses the chosen side; a second one goes to the free side. When a side has no room
+    /// on the screen, the main panel moves so that the drawer fits next to it.
+    func openDrawer(_ target: ActivityDrawer) {
+        guard !target.isOpen else { return }
+        let others = [codexDrawer, claudeDrawer].filter { $0 !== target && $0.isOpen }
+        var side: DrawerSide = others.first.map { $0.side == .right ? .left : .right } ?? drawerSide
+        let width = drawerWidth
+        let screen = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        func room(_ side: DrawerSide) -> Bool {
+            side == .right ? panel.frame.maxX + 6 + width <= screen.maxX : panel.frame.minX - 6 - width >= screen.minX
+        }
+        if !room(side) {
+            if others.isEmpty && room(side == .right ? .left : .right) {
+                side = side == .right ? .left : .right
+            } else {
+                // Shift the main panel so that the drawer fits on the wanted side.
+                var origin = panel.frame.origin
+                if side == .right { origin.x -= (panel.frame.maxX + 6 + width) - screen.maxX }
+                else { origin.x += (screen.minX) - (panel.frame.minX - 6 - width) }
+                panel.setFrameOrigin(origin)
+            }
+        }
+        target.open(parent: panel, side: side, width: width)
+    }
+
+    @objc func showCodexDrawer() { openDrawer(codexDrawer) }
+    @objc func showClaudeDrawer() { openDrawer(claudeDrawer) }
+    @objc func showBothDrawers() {
+        openDrawer(codexDrawer)
+        openDrawer(claudeDrawer)
+    }
+
+    @objc func setDrawerWidth(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(Double(sender.tag), forKey: "drawer.width")
+        refreshDrawerMenu()
+    }
+
+    @objc func setDrawerSide(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(sender.representedObject as? String ?? "right", forKey: "drawer.side")
+        refreshDrawerMenu()
+    }
+
+    /// Keeps the check marks of the width and side items in line with the saved values.
+    func refreshDrawerMenu() {
+        guard let menu = drawerMenu else { return }
+        for item in menu.items {
+            if let sub = item.submenu {
+                for entry in sub.items {
+                    if entry.action == #selector(setDrawerWidth(_:)) { entry.state = Int(drawerWidth) == entry.tag ? .on : .off }
+                    if entry.action == #selector(setDrawerSide(_:)) { entry.state = (entry.representedObject as? String) == drawerSide.rawValue ? .on : .off }
+                }
+            }
+        }
+    }
+
+    /// Hides the main panel and both drawers. Opening the panel again from the status item brings it back.
+    @objc func hidePanel() {
+        codexDrawer.close()
+        claudeDrawer.close()
+        userClosed = true
+        panel.orderOut(nil)
+    }
+
+    func buildMainMenu() -> NSMenu {
+        let main = NSMenu()
+        let app = NSMenuItem()
+        main.addItem(app)
+        let menu = NSMenu(title: "Usage Meter Pure")
+        menu.addItem(withTitle: L("Zavřít panel"), action: #selector(hidePanel), keyEquivalent: "w")
+        menu.addItem(withTitle: L("Minimalizovat"), action: #selector(hidePanel), keyEquivalent: "m")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L("Aktivity Codexu"), action: #selector(showCodexDrawer), keyEquivalent: "1")
+        menu.addItem(withTitle: L("Aktivity Claude"), action: #selector(showClaudeDrawer), keyEquivalent: "2")
+        menu.addItem(withTitle: L("Oba šuflíky"), action: #selector(showBothDrawers), keyEquivalent: "3")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L("Obnovit limity"), action: #selector(refresh), keyEquivalent: "r")
+        menu.addItem(withTitle: L("Ukončit Usage Meter"), action: #selector(quit), keyEquivalent: "q")
+        for item in menu.items { item.target = self }
+        app.submenu = menu
+        return main
+    }
+
+    func buildDrawerMenu() -> NSMenuItem {
+        let root = NSMenuItem(title: L("Šuflíky"), action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: L("Šuflíky"))
+        menu.addItem(withTitle: L("Aktivity Codexu"), action: #selector(showCodexDrawer), keyEquivalent: "")
+        menu.addItem(withTitle: L("Aktivity Claude"), action: #selector(showClaudeDrawer), keyEquivalent: "")
+        menu.addItem(withTitle: L("Oba šuflíky"), action: #selector(showBothDrawers), keyEquivalent: "")
+        menu.addItem(.separator())
+        let width = NSMenuItem(title: L("Šířka"), action: nil, keyEquivalent: "")
+        let widths = NSMenu()
+        for (title, value) in [(L("Úzký"), 260), (L("Střední"), 300), (L("Široký"), 360)] {
+            let item = NSMenuItem(title: title, action: #selector(setDrawerWidth(_:)), keyEquivalent: "")
+            item.tag = value
+            widths.addItem(item)
+        }
+        width.submenu = widths
+        menu.addItem(width)
+        let side = NSMenuItem(title: L("Strana"), action: nil, keyEquivalent: "")
+        let sides = NSMenu()
+        for (title, value) in [(L("Vpravo"), "right"), (L("Vlevo"), "left")] {
+            let item = NSMenuItem(title: title, action: #selector(setDrawerSide(_:)), keyEquivalent: "")
+            item.representedObject = value
+            sides.addItem(item)
+        }
+        side.submenu = sides
+        menu.addItem(side)
+        for item in menu.items { if item.action != nil && item.target == nil { item.target = self } }
+        for item in widths.items + sides.items { item.target = self }
+        root.submenu = menu
+        drawerMenu = menu
+        return root
+    }
+
     @objc func toggleFromMenu() {
         userClosed = false
         if panel.isMiniaturized { panel.deminiaturize(nil) }
@@ -735,10 +891,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                }) {
                 data = CodexUsage.snapshot(payload, now: Date().timeIntervalSince1970)
             }
-            let claude = ClaudeUsage.read()
+            // The limits are shown first; the token scan (cached for five minutes) follows and updates the line again.
+            let claude = ClaudeUsage.read(includeTokens: false)
+            let health = ClaudeHealth.check(claude, now: Date().timeIntervalSince1970)
             ClaudeHistory.record(claude, now: Date().timeIntervalSince1970)
             let history = ClaudeHistory.load()
-            DispatchQueue.main.async { self?.applyClaude(claude, history: history) }
+            DispatchQueue.main.async { self?.applyClaude(claude, history: history, health: health) }
+            var withTokens = claude
+            if let totals = ClaudeUsage.cachedTokenTotals(root: ClaudeUsage.projects, now: Date().timeIntervalSince1970) {
+                withTokens.tokens5h = totals.fiveHour
+                withTokens.tokens7d = totals.week
+            }
+            DispatchQueue.main.async { self?.applyClaude(withTokens, history: history, health: health) }
             var codexHistory: [UsageSample] = []
             if let data = data {
                 CodexHistory.record(data, now: Date().timeIntervalSince1970)
@@ -764,7 +928,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func applyClaude(_ snap: ClaudeSnapshot, history: [UsageSample]) {
+    /// Runs the repair that the Claude line offers, then refreshes so that the line shows the new state.
+    func repairClaude() {
+        switch claudeHealth {
+        case .notConnected:
+            claudeUpdated.stringValue = L("Připojuji Claude Code…")
+            claudeUpdated.textColor = .secondaryLabelColor
+            let binary = Bundle.main.executablePath ?? ""
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let state = ClaudeSetup.install(binary: binary)
+                DispatchQueue.main.async {
+                    self?.claudeSetupLabel.stringValue = state.label
+                    self?.fetchUsage()
+                }
+            }
+        case .noRecentData:
+            refreshClaude()
+        default:
+            break
+        }
+    }
+
+    func applyClaude(_ snap: ClaudeSnapshot, history: [UsageSample], health: ClaudeHealth) {
+        claudeHealth = health
+        claudeRepairButton.stringValue = health.repairTitle ?? ""
+        claudeRepairButton.isHidden = health.repairTitle == nil
         let now = Date().timeIntervalSince1970
         claudeFive.samples = history
         claudeWeek.samples = history
@@ -801,12 +989,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             claudeTokens.stringValue = L("Tokeny z Claude Code: žádné místní záznamy")
         }
         guard let age = age else {
-            claudeUpdated.stringValue = L("Claude: údaj není dostupný")
+            claudeUpdated.stringValue = ([L("Claude: údaj není dostupný")] + (health.message.map { [$0] } ?? [])).joined(separator: "\n")
             claudeUpdated.textColor = .systemOrange
             return
         }
-        var hints: [String] = []
-        if !snap.fromStatusline { hints.append(L("Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu.")) }
+        var hints: [String] = health.message.map { [$0] } ?? []
+        if !snap.fromStatusline && health == .ok { hints.append(L("Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu.")) }
         if stale { hints.append(L("Obnovte: Claude → Nastavení → Využití.")) }
         if stale {
             claudeUpdated.stringValue = ([LF("Claude: starší údaj (%@ min)", String(Int(age / 60)))] + hints).joined(separator: "\n")
@@ -985,6 +1173,40 @@ enum CodexUsage {
     }
 }
 
+/// Why the Claude line shows no fresh data, and the repair that the line offers for it.
+enum ClaudeHealth: Equatable {
+    case ok, notInstalled, notConnected, settingsUnreadable, noRecentData
+
+    static func check(_ snap: ClaudeSnapshot, now: Double) -> ClaudeHealth {
+        if snap.fromStatusline, let observed = snap.planObservedAt, now - observed <= ClaudeStatusline.maxAge { return .ok }
+        guard FileManager.default.fileExists(atPath: ClaudeSetup.claudeDirectory.path) else { return .notInstalled }
+        guard FileManager.default.fileExists(atPath: ClaudeSetup.settingsFile.path) else { return .notConnected }
+        guard let data = try? Data(contentsOf: ClaudeSetup.settingsFile),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .settingsUnreadable }
+        let command = (object["statusLine"] as? [String: Any])?["command"] as? String
+        return ClaudeSetup.isOurs(command) ? .noRecentData : .notConnected
+    }
+
+    var message: String? {
+        switch self {
+        case .ok: return nil
+        case .notInstalled: return L("Claude Code nebyl nalezen. Nainstalujte ho a spusťte.")
+        case .notConnected: return L("Claude Code není připojen k panelu.")
+        case .settingsUnreadable: return L("Soubor ~/.claude/settings.json není platný JSON, nechávám ho beze změny.")
+        case .noRecentData: return L("Data ze Claude Code jsou stará nebo chybí.")
+        }
+    }
+
+    /// Button title for the repair, nil when there is nothing the app can repair by itself.
+    var repairTitle: String? {
+        switch self {
+        case .notConnected: return L("Připojit ↻")
+        case .noRecentData: return L("Obnovit ↻")
+        default: return nil
+        }
+    }
+}
+
 struct ClaudeSnapshot {
     var planObservedAt: Double?
     var fiveHourUsed: Double?
@@ -1011,7 +1233,8 @@ enum ClaudeUsage {
     }()
     static let plainTimeFormatter = ISO8601DateFormatter()
 
-    static func read(now: Date = Date(), planFile: URL = ClaudeUsage.planFile, projects: URL = ClaudeUsage.projects) -> ClaudeSnapshot {
+    static func read(now: Date = Date(), planFile: URL = ClaudeUsage.planFile, projects: URL = ClaudeUsage.projects,
+                     includeTokens: Bool = true) -> ClaudeSnapshot {
         var snap = ClaudeSnapshot()
         if let live = ClaudeStatusline.freshLimits(now: now.timeIntervalSince1970) {
             snap.planObservedAt = live.observedAt
@@ -1025,7 +1248,7 @@ enum ClaudeUsage {
             snap.fiveHourUsed = plan.fiveHour
             snap.weekUsed = plan.week
         }
-        if let totals = tokenTotals(root: projects, now: now.timeIntervalSince1970) {
+        if includeTokens, let totals = cachedTokenTotals(root: projects, now: now.timeIntervalSince1970) {
             snap.tokens5h = totals.fiveHour
             snap.tokens7d = totals.week
         }
@@ -1052,6 +1275,16 @@ enum ClaudeUsage {
             return value
         }
         return (latest.time, percent("fh"), percent("sd"))
+    }
+
+    private static var tokenCache: (computed: Double, totals: (fiveHour: Int, week: Int)?)?
+
+    /// The log scan reads hundreds of megabytes, so the result is kept for five minutes.
+    static func cachedTokenTotals(root: URL, now: Double) -> (fiveHour: Int, week: Int)? {
+        if let cache = tokenCache, now - cache.computed < 300 { return cache.totals }
+        let totals = tokenTotals(root: root, now: now)
+        tokenCache = (now, totals)
+        return totals
     }
 
     /// Sums tokens per message id (streamed records repeat the id, the last record wins).
@@ -1093,6 +1326,93 @@ enum ClaudeUsage {
     }
 }
 
+/// One short request to Claude Code in the background. It runs under `script` (a pseudo-terminal), so Claude Code
+/// behaves as in an interactive session and the status line runs. Stops once the status line has written.
+enum ClaudeRefresh {
+    static let timeout: TimeInterval = 150
+
+    /// Appends one line to `claude-refresh.log` in the app folder, so a failed background run can be diagnosed.
+    static func log(_ text: String) {
+        let url = AppSupport.directory.appendingPathComponent("claude-refresh.log")
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(text)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: url)
+        }
+    }
+
+    static func claudeBinary() -> String? {
+        // `USAGE_METER_TEST_CLAUDE_BIN` lets tests use a stand-in command instead of a real model request.
+        if let override = ProcessInfo.processInfo.environment["USAGE_METER_TEST_CLAUDE_BIN"] { return override }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dirs = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.claude/local"]
+        return dirs.map { "\($0)/claude" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    static func observedAt() -> Double {
+        let url = AppSupport.directory.appendingPathComponent("claude-statusline.json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        return CodexUsage.finiteNumber(object["observedAt"]) ?? 0
+    }
+
+    /// Returns true when the status line wrote a newer reading than before the request.
+    static func run() -> Bool {
+        guard let binary = claudeBinary() else { return false }
+        signal(SIGPIPE, SIG_IGN)   // writing to a finished session must not kill the app
+        try? FileManager.default.createDirectory(at: AppSupport.directory, withIntermediateDirectories: true)
+        let before = observedAt()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        process.arguments = ["-q", "/dev/null", binary, "--model", "haiku", "Reply with the single word: ok"]
+        process.currentDirectoryURL = AppSupport.directory
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        env["TERM"] = "xterm-256color"
+        process.environment = env
+        // `script` ends when its input closes, so stdin is a pipe that stays open until the run is over.
+        let input = Pipe()
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch {
+            log("start failed")
+            return false
+        }
+        let pid = process.processIdentifier
+        log("started pid \(pid) with \(binary)")
+        // Claude Code may first show a one-time dialog (for example the Chrome browser-tools question). Its default
+        // answer is the safe one, so Enter is sent a few times; on a normal prompt an empty Enter does nothing.
+        for delay in [4.0, 8.0, 12.0] {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                try? input.fileHandleForWriting.write(contentsOf: Data("\r".utf8))
+            }
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        var success = false
+        // `Process.isRunning` is not reliable on a background thread, so the process is checked by its pid.
+        var status: Int32 = 0
+        func finished() -> Bool {
+            // Reap the child here: a finished but unreaped process still answers kill(pid, 0).
+            let result = waitpid(pid, &status, WNOHANG)
+            return result == pid || (result == -1 && errno == ECHILD)
+        }
+        while !finished() && Date() < deadline {
+            if observedAt() > before { success = true; break }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        if !finished() { kill(pid, SIGTERM) }
+        try? input.fileHandleForWriting.close()
+        Thread.sleep(forTimeInterval: 1)
+        log(success ? "status line updated" : "no status line update")
+        return success
+    }
+}
+
 /// What Codex is doing right now, read from the newest session log (`~/.codex/sessions`). Local only, no network.
 enum CodexActivity {
     enum Kind: String {
@@ -1107,9 +1427,56 @@ enum CodexActivity {
 
     struct Session {
         let id: String
+        let title: String          // first request of the user, shortened
+        let kind: String           // "chat", "workspace", "cli", "subagent" (see `kind(of:)`)
+        let model: String          // model and reasoning effort of the latest turn, e.g. "gpt-6-astra · ultra"
         let state: String          // "running", "done", "aborted", "idle"
         let updated: Double
         let steps: [Step]
+    }
+
+    struct Meta {
+        let title: String
+        let kind: String
+        let model: String
+    }
+
+    private static let titleLock = NSLock()
+    private static var metas: [String: (modified: Double, meta: Meta)] = [:]
+
+    /// Recent sessions (last 24 h), newest first. Each entry reads only the tail of its log.
+    static func list(root: URL = sessions, now: Double, limit: Int = 40) -> [Session] {
+        guard let walker = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [] }
+        var files: [(url: URL, modified: Double)] = []
+        for case let url as URL in walker where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            if now - modified <= 24 * 3600 { files.append((url, modified)) }
+        }
+        files.sort { $0.modified > $1.modified }
+        let sessions: [Session] = files.prefix(limit).compactMap { file in
+            guard let lines = tailLines(of: file.url) else { return nil }
+            let session = parse(lines: lines, id: sessionID(file.url), modified: file.modified, now: now)
+            let meta = meta(of: file.url, modified: file.modified)
+            return Session(id: session.id, title: meta.title, kind: meta.kind,
+                           model: session.model.isEmpty ? meta.model : session.model, state: session.state,
+                           updated: session.updated, steps: session.steps)
+        }
+        // Running items first; the sort is stable, so the newest order is kept inside each group.
+        return sessions.filter { $0.state == "running" } + sessions.filter { $0.state != "running" }
+    }
+
+    static func tailLines(of url: URL) -> [Data.SubSequence]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let window: UInt64 = 256 * 1024
+        let start = size > window ? size - window : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd() else { return nil }
+        var lines = data.split(separator: 0x0A)
+        if start > 0, !lines.isEmpty { lines.removeFirst() }
+        return lines
     }
 
     static var sessions: URL {
@@ -1147,10 +1514,60 @@ enum CodexActivity {
         return stem.count >= 36 ? String(stem.suffix(36)) : stem
     }
 
+    /// Title (first real request of the user) and kind of the thread, read from the head of the log.
+    static func meta(of url: URL, modified: Double) -> Meta {
+        titleLock.lock()
+        if let cached = metas[url.path], cached.modified == modified { titleLock.unlock(); return cached.meta }
+        titleLock.unlock()
+        var title = "Bez názvu"
+        var kind = "chat"
+        var model = ""
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            let head = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
+            try? handle.close()
+            var foundTitle = false
+            for line in head.split(separator: 0x0A) {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                let payload = object["payload"] as? [String: Any] ?? [:]
+                if object["type"] as? String == "session_meta" {
+                    kind = self.kind(of: payload)
+                    continue
+                }
+                if object["type"] as? String == "turn_context", model.isEmpty, let name = payload["model"] as? String {
+                    let effort = payload["effort"] as? String ?? ""
+                    model = effort.isEmpty ? name : "\(name) · \(effort)"
+                    continue
+                }
+                guard !foundTitle, payload["role"] as? String == "user" else { continue }
+                let text = ((payload["content"] as? [[String: Any]]) ?? []).compactMap { $0["text"] as? String }.joined(separator: " ")
+                let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                if oneLine.isEmpty || oneLine.hasPrefix("<") || oneLine.hasPrefix("#") { continue }
+                title = oneLine.count > 70 ? String(oneLine.prefix(70)) + "…" : oneLine
+                foundTitle = true
+            }
+        }
+        let meta = Meta(title: title, kind: kind, model: model)
+        titleLock.lock()
+        metas[url.path] = (modified, meta)
+        titleLock.unlock()
+        return meta
+    }
+
+    /// Where the thread lives: a plain chat, a project (workspace), the CLI, or an internal subagent / review.
+    static func kind(of meta: [String: Any]) -> String {
+        let thread = meta["thread_source"] as? String ?? ""
+        let origin = meta["originator"] as? String ?? ""
+        if thread == "subagent" || thread == "guardian_review" { return "subagent" }
+        if origin.contains("exec") || origin.contains("tui") { return "cli" }
+        if let roots = meta["runtime_workspace_roots"] as? [String], !roots.isEmpty { return "workspace" }
+        return "chat"
+    }
+
     static func parse(lines: [Data.SubSequence], id: String, modified: Double, now: Double) -> Session {
         var steps: [Step] = []
         var pending: [String: Int] = [:]            // call id -> index of its running step
         var lastStarted: Double?, lastFinished: Double?, aborted = false
+        var model = ""
         for line in lines {
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
             let time = ClaudeUsage.parseTime(object["timestamp"] as? String ?? "") ?? modified
@@ -1158,11 +1575,16 @@ enum CodexActivity {
             let kind = object["type"] as? String ?? ""
             let type = payload["type"] as? String ?? ""
             switch (kind, type) {
+            case ("turn_context", _):
+                let name = payload["model"] as? String ?? ""
+                let effort = payload["effort"] as? String ?? ""
+                if !name.isEmpty { model = effort.isEmpty ? name : "\(name) · \(effort)" }
             case ("event_msg", "task_started"):
                 lastStarted = time
                 steps.append(Step(time: time, kind: .running, text: "Zadání úlohy"))
             case ("event_msg", "task_complete"):
                 lastFinished = time
+                aborted = false          // the last ending decides: an earlier abort does not stick
                 steps.append(Step(time: time, kind: .done, text: "Úloha dokončena"))
             case ("event_msg", "turn_aborted"):
                 lastFinished = time
@@ -1199,7 +1621,7 @@ enum CodexActivity {
         else if let started = lastStarted, (lastFinished ?? 0) < started { state = now - modified < 120 ? "running" : "idle" }
         else if lastFinished != nil { state = "done" }
         else { state = "idle" }
-        return Session(id: id, state: state, updated: modified, steps: Array(steps.suffix(12)))
+        return Session(id: id, title: "", kind: "", model: model, state: state, updated: modified, steps: Array(steps.suffix(12)))
     }
 
     /// A readable name for a tool call. Raw code of the `exec` tool is not shown.
@@ -1235,142 +1657,331 @@ final class ClickableLabel: NSTextField {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
-/// Panel with what Codex is doing right now, updated every two seconds while it is open.
-final class CodexActivityWindow: NSObject {
-    private let panel: NSPanel
-    private let stateLabel = NSTextField(labelWithString: "")
-    private let idLabel = NSTextField(labelWithString: "")
-    private let steps = NSStackView()
-    private var timer: Timer?
-    private var sessionID = ""
-    private let openApp = NSButton(title: "", target: nil, action: nil)
-    private let openTerminal = NSButton(title: "", target: nil, action: nil)
+/// One item of a drawer: a Codex thread or a Claude Code session.
+struct DrawerItem {
+    let id: String
+    let title: String
+    let state: String          // "running", "done", "aborted", "idle"
+    let meta: String           // kind and model, e.g. "workspace · gpt-6-astra · ultra"
+    let last: String           // last step
+    let action: () -> Void
+}
 
-    override init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 360),
-                        styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
-        super.init()
-        panel.title = L("Codex · aktivita")
-        panel.isReleasedWhenClosed = false
-        panel.level = .floating
-        let root = NSView()
-        panel.contentView = root
-        stateLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        idLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        idLabel.textColor = .secondaryLabelColor
-        steps.orientation = .vertical
-        steps.alignment = .leading
-        steps.spacing = 4
-        openApp.title = L("Otevřít v Codexu")
-        openApp.bezelStyle = .rounded
-        openApp.target = self
-        openApp.action = #selector(openInCodex)
-        openTerminal.title = L("Otevřít v Terminálu")
-        openTerminal.bezelStyle = .rounded
-        openTerminal.target = self
-        openTerminal.action = #selector(openInTerminal)
-        let buttons = NSStackView(views: [openApp, openTerminal])
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-        let stack = NSStackView(views: [stateLabel, idLabel, steps, NSView(), buttons])
+enum DrawerSide: String {
+    case left, right
+}
+
+/// One item row. A click runs the item's action (open the thread, or copy the resume command for Claude Code).
+final class ActivityRow: NSView {
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let stateLabel = NSTextField(labelWithString: "")
+    private let stepLabel = NSTextField(labelWithString: "")
+    private let action: () -> Void
+    private var hovering = false { didSet { layer?.backgroundColor = hovering ? NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor : NSColor.clear.cgColor } }
+
+    init(_ item: DrawerItem) {
+        action = item.action
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        titleLabel.stringValue = item.title
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let state = ["running": L("● Běží"), "done": L("✓ Dokončeno"), "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")][item.state] ?? item.state
+        stateLabel.stringValue = [state, item.meta].filter { !$0.isEmpty }.joined(separator: " · ")
+        stateLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        stateLabel.textColor = item.state == "running" ? .systemGreen : item.state == "aborted" ? .systemRed : .secondaryLabelColor
+        stateLabel.lineBreakMode = .byTruncatingTail
+        stateLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        stepLabel.stringValue = item.last
+        stepLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        stepLabel.textColor = .secondaryLabelColor
+        stepLabel.lineBreakMode = .byTruncatingTail
+        stepLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [titleLabel, stateLabel, stepLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14)
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(stack)
+        addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: root.topAnchor), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            steps.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28)
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            stateLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20),
+            stepLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20)
         ])
-        panel.setContentSize(NSSize(width: 380, height: 360))
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
     }
 
-    func show() {
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { action() }
+}
+
+/// A drawer that lists recent activity of one source (Codex or Claude). It slides out beside the main panel.
+final class ActivityDrawer: NSObject {
+    enum Source: String {
+        case codex, claude
+    }
+
+    let source: Source
+    private let panel: NSPanel
+    private let list = NSStackView()
+    private let empty = NSTextField(labelWithString: "")
+    private let note = NSTextField(labelWithString: "")
+    private var timer: Timer?
+    private weak var parent: NSWindow?
+    private let header = NSTextField(labelWithString: "")
+    private(set) var isOpen = false
+    private(set) var side: DrawerSide = .right
+    private var width: CGFloat = 300
+
+    init(source: Source) {
+        self.source = source
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 0, height: 300),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        super.init()
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isReleasedWhenClosed = false
+        panel.level = .floating
+        let background = NSVisualEffectView()
+        background.material = .hudWindow
+        background.blendingMode = .behindWindow
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.cornerRadius = 12
+        background.layer?.masksToBounds = true
+        panel.contentView = background
+
+        // The header names the source, so it is clear which drawer this is.
+        header.stringValue = source == .codex ? L("Codex · aktivity za 24 h") : L("Claude · aktivity za 24 h")
+        header.font = .systemFont(ofSize: 12, weight: .bold)
+        header.textColor = source == .codex ? Palette.quota : Palette.claude
+        let close = ClickableLabel(labelWithString: "✕")
+        close.font = .systemFont(ofSize: 12, weight: .medium)
+        close.textColor = .secondaryLabelColor
+        close.onClick = { [weak self] in self?.close() }
+        let headerRow = NSStackView(views: [header, NSView(), close])
+        headerRow.orientation = .horizontal
+        headerRow.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 4, right: 12)
+        note.isHidden = true
+        empty.isHidden = true
+        note.font = .systemFont(ofSize: 10)
+        note.textColor = .secondaryLabelColor
+        note.maximumNumberOfLines = 2
+        note.lineBreakMode = .byWordWrapping
+        note.preferredMaxLayoutWidth = 260
+
+        list.orientation = .vertical
+        list.alignment = .leading
+        list.spacing = 4
+        list.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 8, right: 8)
+        empty.font = .systemFont(ofSize: 11)
+        empty.textColor = .tertiaryLabelColor
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        list.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(list)
+        scroll.documentView = document
+        NSLayoutConstraint.activate([
+            list.topAnchor.constraint(equalTo: document.topAnchor), list.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: document.trailingAnchor), list.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+        ])
+
+        let stack = NSStackView(views: [headerRow, note, empty, scroll])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: background.leadingAnchor), stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: background.topAnchor), stack.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            headerRow.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+    }
+
+    /// Opens the drawer on the given side of the parent window, with the chosen width.
+    func open(parent: NSWindow, side: DrawerSide, width: CGFloat) {
+        guard !isOpen else { return }
+        isOpen = true
+        self.parent = parent
+        self.side = side
+        self.width = width
+        panel.contentMinSize = NSSize(width: width, height: 120)
+        panel.contentMaxSize = NSSize(width: width, height: 4000)
+        let frame = parent.frame
+        // The caller has already made room for the drawer on this side.
+        let x = side == .right ? frame.maxX + 6 : frame.minX - width - 6
+        let target = NSRect(x: x, y: frame.minY, width: width, height: frame.height)
+        panel.setFrame(NSRect(x: frame.minX, y: frame.minY, width: 0, height: frame.height), display: false)
+        parent.addChildWindow(panel, ordered: .above)
+        panel.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            panel.animator().setFrame(target, display: true)
+        }
         refresh()
-        panel.center()
-        panel.makeKeyAndOrderFront(nil)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
+    func close() {
+        guard isOpen else { return }
+        isOpen = false
+        timer?.invalidate()
+        timer = nil
+        let frame = panel.frame
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.18
+            panel.animator().setFrame(NSRect(x: frame.minX, y: frame.minY, width: 0, height: frame.height), display: true)
+        }, completionHandler: { [weak self] in
+            guard let self = self else { return }
+            self.parent?.removeChildWindow(self.panel)
+            self.panel.orderOut(nil)
+        })
+    }
+
     func refresh() {
+        let source = self.source
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let session = CodexActivity.latest(now: Date().timeIntervalSince1970)
-            DispatchQueue.main.async { self?.apply(session) }
+            let items: [DrawerItem]
+            switch source {
+            case .codex:
+                items = CodexActivity.list(now: Date().timeIntervalSince1970).map { session in
+                    DrawerItem(id: session.id, title: session.title, state: session.state,
+                               meta: [session.kind == "chat" ? L("chat") : session.kind == "workspace" ? L("workspace") : session.kind == "cli" ? L("Codex CLI") : L("subagent"),
+                                      session.model.isEmpty ? L("model neznámý") : session.model].joined(separator: " · "),
+                               last: session.steps.last?.text ?? "") {
+                        if let url = URL(string: "codex://threads/\(session.id)") { NSWorkspace.shared.open(url) }
+                    }
+                }
+            case .claude:
+                items = ClaudeActivity.list(now: Date().timeIntervalSince1970).map { session in
+                    DrawerItem(id: session.id, title: session.title, state: session.state,
+                               meta: [L("Claude Code"), session.model.isEmpty ? L("model neznámý") : session.model].joined(separator: " · "),
+                               last: session.steps.last?.text ?? "") {
+                        let command = "claude --resume \(session.id)"
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(command, forType: .string)
+                        DispatchQueue.main.async { self?.showNote(L("Příkaz zkopírován: vložte do Terminálu.")) }
+                    }
+                }
+            }
+            DispatchQueue.main.async { self?.apply(items) }
         }
     }
 
-    private func apply(_ session: CodexActivity.Session?) {
-        guard let session = session else {
-            stateLabel.stringValue = L("Codex: zatím žádná aktivita")
-            idLabel.stringValue = ""
-            sessionID = ""
-            steps.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            openTerminal.isEnabled = false
-            return
+    private func showNote(_ text: String) {
+        note.stringValue = text
+        note.isHidden = text.isEmpty
+    }
+
+    private func apply(_ items: [DrawerItem]) {
+        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        empty.stringValue = items.isEmpty ? L("Zatím žádná aktivita za posledních 24 h.") : ""
+        empty.isHidden = items.isEmpty == false
+        for item in items {
+            let row = ActivityRow(item)
+            list.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -16).isActive = true
         }
-        sessionID = session.id
-        openTerminal.isEnabled = true
-        stateLabel.stringValue = [
-            "running": L("● Běží"), "done": L("✓ Dokončeno"),
-            "aborted": L("✖ Přerušeno"), "idle": L("○ Nečinný")
-        ][session.state] ?? session.state
-        stateLabel.textColor = session.state == "aborted" ? .systemRed : session.state == "running" ? .systemGreen : .labelColor
-        idLabel.stringValue = session.id
-        steps.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for step in session.steps {
-            let line = NSTextField(labelWithString: "")
-            line.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-            line.lineBreakMode = .byTruncatingTail
-            line.maximumNumberOfLines = 2
-            line.preferredMaxLayoutWidth = 320
-            line.attributedStringValue = NSAttributedString(string: "\(icon(step.kind))  \(step.text)", attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: color(step.kind)])
-            steps.addArrangedSubview(line)
+    }
+}
+
+/// Recent Claude Code sessions (`~/.claude/projects/<project>/<id>.jsonl`), in the same shape as Codex items.
+enum ClaudeActivity {
+    private static let lock = NSLock()
+    private static var titles: [String: (modified: Double, title: String)] = [:]
+
+    static func list(root: URL = ClaudeUsage.projects, now: Double, limit: Int = 40) -> [CodexActivity.Session] {
+        guard let walker = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [] }
+        var files: [(url: URL, modified: Double)] = []
+        for case let url as URL in walker where url.pathExtension == "jsonl" && !url.path.contains("/subagents/") {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            if now - modified <= 24 * 3600 { files.append((url, modified)) }
+        }
+        files.sort { $0.modified > $1.modified }
+        return files.prefix(limit).compactMap { file in
+            guard let lines = CodexActivity.tailLines(of: file.url) else { return nil }
+            return parse(lines: lines, url: file.url, modified: file.modified, now: now)
         }
     }
 
-    private func icon(_ kind: CodexActivity.Kind) -> String {
-        switch kind {
-        case .running: return "●"
-        case .waiting: return "◐"
-        case .error: return "✖"
-        case .done: return "✓"
-        case .info: return "•"
+    static func parse(lines: [Data.SubSequence], url: URL, modified: Double, now: Double) -> CodexActivity.Session {
+        var steps: [CodexActivity.Step] = []
+        var model = ""
+        var lastType = ""
+        for line in lines {
+            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            let type = object["type"] as? String ?? ""
+            let time = ClaudeUsage.parseTime(object["timestamp"] as? String ?? "") ?? modified
+            lastType = type
+            guard let message = object["message"] as? [String: Any] else { continue }
+            if type == "assistant", let name = message["model"] as? String, name != "<synthetic>" { model = name }
+            guard type == "assistant", let content = message["content"] as? [[String: Any]] else { continue }
+            for item in content {
+                if item["type"] as? String == "tool_use" {
+                    let input = item["input"] as? [String: Any] ?? [:]
+                    let detail = (input["command"] as? String) ?? (input["file_path"] as? String) ?? (input["pattern"] as? String) ?? (input["description"] as? String) ?? ""
+                    let name = item["name"] as? String ?? "nástroj"
+                    steps.append(CodexActivity.Step(time: time, kind: .running, text: CodexActivity.short(detail.isEmpty ? name : "\(name): \(detail)")))
+                } else if item["type"] as? String == "text", let text = item["text"] as? String, !text.isEmpty {
+                    steps.append(CodexActivity.Step(time: time, kind: .info, text: CodexActivity.short(text)))
+                }
+            }
         }
+        let state = (now - modified < 120 && lastType != "summary") ? "running" : "done"
+        let id = url.deletingPathExtension().lastPathComponent
+        return CodexActivity.Session(id: id, title: title(of: url, modified: modified), kind: "Claude Code",
+                                     model: model, state: state, updated: modified, steps: Array(steps.suffix(12)))
     }
 
-    private func color(_ kind: CodexActivity.Kind) -> NSColor {
-        switch kind {
-        case .running: return .systemGreen
-        case .waiting: return .systemYellow
-        case .error: return .systemRed
-        case .done: return .tertiaryLabelColor
-        case .info: return .labelColor
+    /// First request of the user in the session, cached per file and modification time.
+    static func title(of url: URL, modified: Double) -> String {
+        lock.lock()
+        if let cached = titles[url.path], cached.modified == modified { lock.unlock(); return cached.title }
+        lock.unlock()
+        var found = L("Bez názvu")
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            let head = (try? handle.read(upToCount: 128 * 1024)) ?? Data()
+            try? handle.close()
+            for line in head.split(separator: 0x0A) {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      object["type"] as? String == "user",
+                      let message = object["message"] as? [String: Any] else { continue }
+                var text = ""
+                if let plain = message["content"] as? String { text = plain }
+                else if let items = message["content"] as? [[String: Any]] {
+                    text = items.compactMap { $0["text"] as? String }.joined(separator: " ")
+                }
+                let oneLine = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                if oneLine.isEmpty || oneLine.hasPrefix("<") { continue }
+                found = oneLine.count > 70 ? String(oneLine.prefix(70)) + "…" : oneLine
+                break
+            }
         }
-    }
-
-    @objc private func openInCodex() {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") else {
-            stateLabel.stringValue = L("Aplikace Codex nebyla nalezena.")
-            return
-        }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-    }
-
-    /// Opens Terminal and runs `codex resume <id>`. The command is also copied, so it can be pasted if Terminal refuses.
-    @objc private func openInTerminal() {
-        guard !sessionID.isEmpty else { return }
-        let command = "codex resume \(sessionID)"
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-        let script = NSAppleScript(source: "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell")
-        var error: NSDictionary?
-        script?.executeAndReturnError(&error)
-        if error != nil { stateLabel.stringValue = L("Příkaz je zkopírován: vložte ho do Terminálu.") }
+        lock.lock()
+        titles[url.path] = (modified, found)
+        lock.unlock()
+        return found
     }
 }
 
@@ -2083,6 +2694,22 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-hist
     print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
     exit(0)
 }
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--claude-list" {
+    let args = CommandLine.arguments
+    let items = ClaudeActivity.list(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0).map { session -> [String: Any] in
+        ["id": session.id, "title": session.title, "kind": session.kind, "model": session.model, "state": session.state, "last": session.steps.last?.text ?? ""]
+    }
+    print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-list" {
+    let args = CommandLine.arguments
+    let items = CodexActivity.list(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0).map { session -> [String: Any] in
+        ["id": session.id, "title": session.title, "kind": session.kind, "model": session.model, "state": session.state, "last": session.steps.last?.text ?? ""]
+    }
+    print(String(data: try JSONSerialization.data(withJSONObject: items, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
 if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-activity" {
     let args = CommandLine.arguments
     let now = Double(args[3]) ?? 0
@@ -2100,6 +2727,20 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-toke
     let totals = CodexTokens.totals(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0)
     let out: [String: Any] = ["fiveHour": totals?.fiveHour ?? -1, "week": totals?.week ?? -1]
     print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--claude-refresh" {
+    // Runs the background refresh once and prints the result (used to verify the button's code path).
+    print(ClaudeRefresh.run() ? "ok" : "failed")
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--claude-health" {
+    // Test hook: prints the health of the Claude connection for the given storage and Claude folders.
+    let args = CommandLine.arguments
+    let now = Double(args[3]) ?? 0
+    let snap = ClaudeUsage.read(now: Date(timeIntervalSince1970: now), planFile: URL(fileURLWithPath: "/nonexistent"),
+                                projects: URL(fileURLWithPath: "/nonexistent"))
+    print(ClaudeHealth.check(snap, now: now))
     exit(0)
 }
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--claude-setup" {
