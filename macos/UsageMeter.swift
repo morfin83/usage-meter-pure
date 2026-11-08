@@ -544,8 +544,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.translatesAutoresizingMaskIntoConstraints = false
         scroll = NSScrollView()
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.hasVerticalScroller = false
+        scroll.verticalScrollElasticity = .none
         scroll.translatesAutoresizingMaskIntoConstraints = false
         canvas = NSView(frame: NSRect(x: 0, y: 0, width: 292, height: 700))
         canvas.addSubview(root)
@@ -1772,6 +1772,8 @@ final class ActivityDrawer: NSObject {
         let headerRow = NSStackView(views: [header, NSView(), close])
         headerRow.orientation = .horizontal
         headerRow.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 4, right: 12)
+        note.isHidden = true
+        empty.isHidden = true
         note.font = .systemFont(ofSize: 10)
         note.textColor = .secondaryLabelColor
         note.maximumNumberOfLines = 2
@@ -1781,7 +1783,7 @@ final class ActivityDrawer: NSObject {
         list.orientation = .vertical
         list.alignment = .leading
         list.spacing = 4
-        list.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 8, right: 8)
+        list.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 8, right: 8)
         empty.font = .systemFont(ofSize: 11)
         empty.textColor = .tertiaryLabelColor
 
@@ -1888,11 +1890,13 @@ final class ActivityDrawer: NSObject {
 
     private func showNote(_ text: String) {
         note.stringValue = text
+        note.isHidden = text.isEmpty
     }
 
     private func apply(_ items: [DrawerItem]) {
         list.arrangedSubviews.forEach { $0.removeFromSuperview() }
         empty.stringValue = items.isEmpty ? L("Zatím žádná aktivita za posledních 24 h.") : ""
+        empty.isHidden = items.isEmpty == false
         for item in items {
             let row = ActivityRow(item)
             list.addArrangedSubview(row)
