@@ -326,6 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let claudeSetupLabel = NSTextField(labelWithString: "")
     let claudeLive = NSTextField(labelWithString: "")
     let claudeRefreshButton = ClickableLabel(labelWithString: "")
+    var claudeRefreshing = false
     var telemetryTimer: Timer?
     var usageTimer: Timer?
     var isFetching = false
@@ -625,24 +626,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if positioned && !resizing { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: "panelOrigin") }
     }
     @objc func openWebsite() { NSWorkspace.shared.open(URL(string: "https://www.studiopuresound.cz")!) }
-    /// Asks first, because a refresh is a real (small) model request. The status line only updates
-    /// inside an interactive Claude Code session, so the request runs there and the session is left open.
+    /// Asks first, because a refresh is a real (small) model request. The request runs in the background:
+    /// Claude Code is started inside a pseudo-terminal (no window, no Terminal automation), the status line
+    /// writes the fresh limits, and the session is then closed.
     func refreshClaude() {
         let alert = NSAlert()
         alert.messageText = L("Obnovit data Claude?")
-        alert.informativeText = L("Otevře se Terminál s Claude Code a pošle se jedna krátká zpráva. Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD na Haiku, víc na větším modelu). Potom Terminál můžete zavřít.")
+        alert.informativeText = L("Na pozadí se pošle jedna krátká zpráva Claude Code (model Haiku). Spotřebuje to přibližně 60 000 tokenů (asi 0,01 USD).")
         alert.addButton(withTitle: L("Obnovit"))
         alert.addButton(withTitle: L("Zrušit"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        // Runs in the app's own folder: Claude Code asks once to trust a folder, and the prompt would block the message.
-        let folder = AppSupport.directory.path.replacingOccurrences(of: "'", with: "'\\''")
-        let command = "mkdir -p '\(folder)' && cd '\(folder)' && claude \\\"Reply with the single word: ok\\\""
-        let source = "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell"
-        var error: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if error != nil {
-            claudeUpdated.stringValue = L("Terminál nelze ovládat. Povolte Usage Meter Pure v Soukromí a zabezpečení > Automatizace.")
-            claudeUpdated.textColor = .systemOrange
+        guard !claudeRefreshing else { return }
+        claudeRefreshing = true
+        claudeUpdated.stringValue = L("Claude: obnovuji data…")
+        claudeUpdated.textColor = .secondaryLabelColor
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let ok = ClaudeRefresh.run()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.claudeRefreshing = false
+                self.claudeUpdated.stringValue = ok ? L("Claude: data obnovena.") : L("Claude: obnovení se nepovedlo. Zkuste to znovu.")
+                self.claudeUpdated.textColor = ok ? .systemGreen : .systemOrange
+                self.fetchUsage()
+            }
         }
     }
 
@@ -1090,6 +1096,93 @@ enum ClaudeUsage {
 
     static func compact(_ count: Int) -> String {
         count >= 1_000_000 ? String(format: "%.1f M", Double(count) / 1e6) : String(format: "%.0f k", Double(count) / 1e3)
+    }
+}
+
+/// One short request to Claude Code in the background. It runs under `script` (a pseudo-terminal), so Claude Code
+/// behaves as in an interactive session and the status line runs. Stops once the status line has written.
+enum ClaudeRefresh {
+    static let timeout: TimeInterval = 150
+
+    /// Appends one line to `claude-refresh.log` in the app folder, so a failed background run can be diagnosed.
+    static func log(_ text: String) {
+        let url = AppSupport.directory.appendingPathComponent("claude-refresh.log")
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(text)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: url)
+        }
+    }
+
+    static func claudeBinary() -> String? {
+        // `USAGE_METER_TEST_CLAUDE_BIN` lets tests use a stand-in command instead of a real model request.
+        if let override = ProcessInfo.processInfo.environment["USAGE_METER_TEST_CLAUDE_BIN"] { return override }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dirs = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.claude/local"]
+        return dirs.map { "\($0)/claude" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    static func observedAt() -> Double {
+        let url = AppSupport.directory.appendingPathComponent("claude-statusline.json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        return CodexUsage.finiteNumber(object["observedAt"]) ?? 0
+    }
+
+    /// Returns true when the status line wrote a newer reading than before the request.
+    static func run() -> Bool {
+        guard let binary = claudeBinary() else { return false }
+        signal(SIGPIPE, SIG_IGN)   // writing to a finished session must not kill the app
+        try? FileManager.default.createDirectory(at: AppSupport.directory, withIntermediateDirectories: true)
+        let before = observedAt()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        process.arguments = ["-q", "/dev/null", binary, "--model", "haiku", "Reply with the single word: ok"]
+        process.currentDirectoryURL = AppSupport.directory
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        env["TERM"] = "xterm-256color"
+        process.environment = env
+        // `script` ends when its input closes, so stdin is a pipe that stays open until the run is over.
+        let input = Pipe()
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch {
+            log("start failed")
+            return false
+        }
+        let pid = process.processIdentifier
+        log("started pid \(pid) with \(binary)")
+        // Claude Code may first show a one-time dialog (for example the Chrome browser-tools question). Its default
+        // answer is the safe one, so Enter is sent a few times; on a normal prompt an empty Enter does nothing.
+        for delay in [4.0, 8.0, 12.0] {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                try? input.fileHandleForWriting.write(contentsOf: Data("\r".utf8))
+            }
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        var success = false
+        // `Process.isRunning` is not reliable on a background thread, so the process is checked by its pid.
+        var status: Int32 = 0
+        func finished() -> Bool {
+            // Reap the child here: a finished but unreaped process still answers kill(pid, 0).
+            let result = waitpid(pid, &status, WNOHANG)
+            return result == pid || (result == -1 && errno == ECHILD)
+        }
+        while !finished() && Date() < deadline {
+            if observedAt() > before { success = true; break }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        if !finished() { kill(pid, SIGTERM) }
+        try? input.fileHandleForWriting.close()
+        Thread.sleep(forTimeInterval: 1)
+        log(success ? "status line updated" : "no status line update")
+        return success
     }
 }
 
@@ -2100,6 +2193,11 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-toke
     let totals = CodexTokens.totals(root: URL(fileURLWithPath: args[2]), now: Double(args[3]) ?? 0)
     let out: [String: Any] = ["fiveHour": totals?.fiveHour ?? -1, "week": totals?.week ?? -1]
     print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--claude-refresh" {
+    // Runs the background refresh once and prints the result (used to verify the button's code path).
+    print(ClaudeRefresh.run() ? "ok" : "failed")
     exit(0)
 }
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--claude-setup" {
