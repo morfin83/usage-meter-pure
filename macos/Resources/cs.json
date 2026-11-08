@@ -93,5 +93,12 @@
   "workspace": "workspace",
   "Codex CLI": "Codex CLI",
   "subagent": "subagent",
-  "model neznámý": "model neznámý"
+  "model neznámý": "model neznámý",
+  "Claude Code nebyl nalezen. Nainstalujte ho a spusťte.": "Claude Code nebyl nalezen. Nainstalujte ho a spusťte.",
+  "Claude Code není připojen k panelu.": "Claude Code není připojen k panelu.",
+  "Soubor ~/.claude/settings.json není platný JSON, nechávám ho beze změny.": "Soubor ~/.claude/settings.json není platný JSON, nechávám ho beze změny.",
+  "Data ze Claude Code jsou stará nebo chybí.": "Data ze Claude Code jsou stará nebo chybí.",
+  "Připojit ↻": "Připojit ↻",
+  "Obnovit ↻": "Obnovit ↻",
+  "Připojuji Claude Code…": "Připojuji Claude Code…"
 }

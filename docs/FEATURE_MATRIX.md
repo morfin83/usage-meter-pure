@@ -31,4 +31,6 @@ Stavy: DONE = hotovo a kryto kontrolou v repozitáři; PARTIAL = hotovo, ne zcel
 | Tokeny Codex z lokálních logů (5 h, 7 dní) | DONE | `test_codex_tokens.py`; shoda s nezávislým výpočtem |
 | Výsuvný šuflík „Aktivity Codexu za 24 h": běžící položky nahoře, scrollování, klik otevře vlákno v desktopové aplikaci Codex (`codex://threads/<id>`) | DONE | `test_codex_list.py`; ruční ověření klikem |
 | Otevření vlákna na konkrétním místě (ne jen na vlákně) | NOT POSSIBLE | aplikace nemá odkaz na konkrétní zprávu; otevře se vlákno |
+| Diagnostika připojení Claude s tlačítkem opravy na řádku (Připojit / Obnovit) a opakované načtení po opravě | DONE | `test_claude_health.py`; ruční ověření |
+| Token součty Claude z logů jsou počítány s cache 5 min a až po zobrazení limitů | DONE | `test_claude_sources.py`; měření 7,6 s na 400 MB logů |
 

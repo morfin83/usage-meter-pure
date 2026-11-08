@@ -326,6 +326,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let claudeSetupLabel = NSTextField(labelWithString: "")
     let claudeLive = NSTextField(labelWithString: "")
     let claudeRefreshButton = ClickableLabel(labelWithString: "")
+    let claudeRepairButton = ClickableLabel(labelWithString: "")
+    var claudeHealth: ClaudeHealth = .ok
     var claudeRefreshing = false
     var telemetryTimer: Timer?
     var usageTimer: Timer?
@@ -495,9 +497,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         claudeRefreshButton.font = .systemFont(ofSize: 10, weight: .medium)
         claudeRefreshButton.textColor = .controlAccentColor
         claudeRefreshButton.onClick = { [weak self] in self?.refreshClaude() }
+        claudeRepairButton.font = .systemFont(ofSize: 10, weight: .medium)
+        claudeRepairButton.textColor = .systemOrange
+        claudeRepairButton.isHidden = true
+        claudeRepairButton.onClick = { [weak self] in self?.repairClaude() }
         let claudeHeader = NSStackView(views: [claudeTitle, NSView(), claudeRefreshButton])
         claudeHeader.orientation = .horizontal
-        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeHeader, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeSetupLabel], spacing: 12)
+        aiBody = vertical([codexHeader, quota, weekly, creditLabel, codexTokensLabel, updated, claudeHeader, claudeFive, claudeWeek, claudeLive, claudeTokens, claudeUpdated, claudeRepairButton, claudeSetupLabel], spacing: 12)
         for row in [quota, weekly, claudeFive, claudeWeek] { row.onChange = { [weak self] in self?.resize() } }
         let logo = NSImageView()
         if let url = Bundle.main.url(forResource: "purelogo", withExtension: "png"),
@@ -744,10 +750,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                }) {
                 data = CodexUsage.snapshot(payload, now: Date().timeIntervalSince1970)
             }
-            let claude = ClaudeUsage.read()
+            // The limits are shown first; the token scan (cached for five minutes) follows and updates the line again.
+            let claude = ClaudeUsage.read(includeTokens: false)
+            let health = ClaudeHealth.check(claude, now: Date().timeIntervalSince1970)
             ClaudeHistory.record(claude, now: Date().timeIntervalSince1970)
             let history = ClaudeHistory.load()
-            DispatchQueue.main.async { self?.applyClaude(claude, history: history) }
+            DispatchQueue.main.async { self?.applyClaude(claude, history: history, health: health) }
+            var withTokens = claude
+            if let totals = ClaudeUsage.cachedTokenTotals(root: ClaudeUsage.projects, now: Date().timeIntervalSince1970) {
+                withTokens.tokens5h = totals.fiveHour
+                withTokens.tokens7d = totals.week
+            }
+            DispatchQueue.main.async { self?.applyClaude(withTokens, history: history, health: health) }
             var codexHistory: [UsageSample] = []
             if let data = data {
                 CodexHistory.record(data, now: Date().timeIntervalSince1970)
@@ -773,7 +787,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func applyClaude(_ snap: ClaudeSnapshot, history: [UsageSample]) {
+    /// Runs the repair that the Claude line offers, then refreshes so that the line shows the new state.
+    func repairClaude() {
+        switch claudeHealth {
+        case .notConnected:
+            claudeUpdated.stringValue = L("Připojuji Claude Code…")
+            claudeUpdated.textColor = .secondaryLabelColor
+            let binary = Bundle.main.executablePath ?? ""
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let state = ClaudeSetup.install(binary: binary)
+                DispatchQueue.main.async {
+                    self?.claudeSetupLabel.stringValue = state.label
+                    self?.fetchUsage()
+                }
+            }
+        case .noRecentData:
+            refreshClaude()
+        default:
+            break
+        }
+    }
+
+    func applyClaude(_ snap: ClaudeSnapshot, history: [UsageSample], health: ClaudeHealth) {
+        claudeHealth = health
+        claudeRepairButton.stringValue = health.repairTitle ?? ""
+        claudeRepairButton.isHidden = health.repairTitle == nil
         let now = Date().timeIntervalSince1970
         claudeFive.samples = history
         claudeWeek.samples = history
@@ -810,12 +848,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             claudeTokens.stringValue = L("Tokeny z Claude Code: žádné místní záznamy")
         }
         guard let age = age else {
-            claudeUpdated.stringValue = L("Claude: údaj není dostupný")
+            claudeUpdated.stringValue = ([L("Claude: údaj není dostupný")] + (health.message.map { [$0] } ?? [])).joined(separator: "\n")
             claudeUpdated.textColor = .systemOrange
             return
         }
-        var hints: [String] = []
-        if !snap.fromStatusline { hints.append(L("Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu.")) }
+        var hints: [String] = health.message.map { [$0] } ?? []
+        if !snap.fromStatusline && health == .ok { hints.append(L("Statusline Claude Code zatím nedodal data: spusťte `claude` v Terminálu.")) }
         if stale { hints.append(L("Obnovte: Claude → Nastavení → Využití.")) }
         if stale {
             claudeUpdated.stringValue = ([LF("Claude: starší údaj (%@ min)", String(Int(age / 60)))] + hints).joined(separator: "\n")
@@ -994,6 +1032,40 @@ enum CodexUsage {
     }
 }
 
+/// Why the Claude line shows no fresh data, and the repair that the line offers for it.
+enum ClaudeHealth: Equatable {
+    case ok, notInstalled, notConnected, settingsUnreadable, noRecentData
+
+    static func check(_ snap: ClaudeSnapshot, now: Double) -> ClaudeHealth {
+        if snap.fromStatusline, let observed = snap.planObservedAt, now - observed <= ClaudeStatusline.maxAge { return .ok }
+        guard FileManager.default.fileExists(atPath: ClaudeSetup.claudeDirectory.path) else { return .notInstalled }
+        guard FileManager.default.fileExists(atPath: ClaudeSetup.settingsFile.path) else { return .notConnected }
+        guard let data = try? Data(contentsOf: ClaudeSetup.settingsFile),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .settingsUnreadable }
+        let command = (object["statusLine"] as? [String: Any])?["command"] as? String
+        return ClaudeSetup.isOurs(command) ? .noRecentData : .notConnected
+    }
+
+    var message: String? {
+        switch self {
+        case .ok: return nil
+        case .notInstalled: return L("Claude Code nebyl nalezen. Nainstalujte ho a spusťte.")
+        case .notConnected: return L("Claude Code není připojen k panelu.")
+        case .settingsUnreadable: return L("Soubor ~/.claude/settings.json není platný JSON, nechávám ho beze změny.")
+        case .noRecentData: return L("Data ze Claude Code jsou stará nebo chybí.")
+        }
+    }
+
+    /// Button title for the repair, nil when there is nothing the app can repair by itself.
+    var repairTitle: String? {
+        switch self {
+        case .notConnected: return L("Připojit ↻")
+        case .noRecentData: return L("Obnovit ↻")
+        default: return nil
+        }
+    }
+}
+
 struct ClaudeSnapshot {
     var planObservedAt: Double?
     var fiveHourUsed: Double?
@@ -1020,7 +1092,8 @@ enum ClaudeUsage {
     }()
     static let plainTimeFormatter = ISO8601DateFormatter()
 
-    static func read(now: Date = Date(), planFile: URL = ClaudeUsage.planFile, projects: URL = ClaudeUsage.projects) -> ClaudeSnapshot {
+    static func read(now: Date = Date(), planFile: URL = ClaudeUsage.planFile, projects: URL = ClaudeUsage.projects,
+                     includeTokens: Bool = true) -> ClaudeSnapshot {
         var snap = ClaudeSnapshot()
         if let live = ClaudeStatusline.freshLimits(now: now.timeIntervalSince1970) {
             snap.planObservedAt = live.observedAt
@@ -1034,7 +1107,7 @@ enum ClaudeUsage {
             snap.fiveHourUsed = plan.fiveHour
             snap.weekUsed = plan.week
         }
-        if let totals = tokenTotals(root: projects, now: now.timeIntervalSince1970) {
+        if includeTokens, let totals = cachedTokenTotals(root: projects, now: now.timeIntervalSince1970) {
             snap.tokens5h = totals.fiveHour
             snap.tokens7d = totals.week
         }
@@ -1061,6 +1134,16 @@ enum ClaudeUsage {
             return value
         }
         return (latest.time, percent("fh"), percent("sd"))
+    }
+
+    private static var tokenCache: (computed: Double, totals: (fiveHour: Int, week: Int)?)?
+
+    /// The log scan reads hundreds of megabytes, so the result is kept for five minutes.
+    static func cachedTokenTotals(root: URL, now: Double) -> (fiveHour: Int, week: Int)? {
+        if let cache = tokenCache, now - cache.computed < 300 { return cache.totals }
+        let totals = tokenTotals(root: root, now: now)
+        tokenCache = (now, totals)
+        return totals
     }
 
     /// Sums tokens per message id (streamed records repeat the id, the last record wins).
@@ -2372,6 +2455,15 @@ if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--codex-toke
 if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--claude-refresh" {
     // Runs the background refresh once and prints the result (used to verify the button's code path).
     print(ClaudeRefresh.run() ? "ok" : "failed")
+    exit(0)
+}
+if CommandLine.arguments.count >= 4 && CommandLine.arguments[1] == "--claude-health" {
+    // Test hook: prints the health of the Claude connection for the given storage and Claude folders.
+    let args = CommandLine.arguments
+    let now = Double(args[3]) ?? 0
+    let snap = ClaudeUsage.read(now: Date(timeIntervalSince1970: now), planFile: URL(fileURLWithPath: "/nonexistent"),
+                                projects: URL(fileURLWithPath: "/nonexistent"))
+    print(ClaudeHealth.check(snap, now: now))
     exit(0)
 }
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--claude-setup" {
