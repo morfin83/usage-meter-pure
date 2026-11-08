@@ -4,6 +4,16 @@ Only facts that were checked are listed here. Checksums are SHA-256 of the distr
 
 ## 0.7.0 build 16 — installed locally, release pending approval
 
+- Drawers for Codex and Claude Code, both can be open; the second goes to the free side, the main panel moves if needed.
+- Width and side of the drawers in the "Šuflíky" menu; keyboard shortcuts ⌘W, ⌘M, ⌘1–⌘3, ⌘R, ⌘Q.
+- Thread kind and model in the Codex drawer; Claude repair button on its line; faster Claude token scan (cached).
+- Main panel without scrolling; drawers keep their scrolling.
+- DMG: `Usage-Meter-Pure-0.7.0-build16-arm64.dmg`, SHA-256 `6a47be595d07a62cd7d10478a2026daff4dc64e515261636408d4edeedee6908`.
+- Verified: 74 unit tests; drawers, placement and shortcuts on the running app.
+- Not verified: clean macOS 13+ machine; the first Claude background refresh on another account.
+
+## 0.6.2 build 15 — installed locally, release pending approval
+
 - Claude line explains why there are no fresh data and offers the repair on the same line: "Připojit ↻" or "Obnovit ↻"; afterwards the data are read again.
 - Fixed the stuck "loading" state: the Claude token scan (about 400 MB of logs, 7.6 s per refresh) now runs after the limits are shown and is cached for five minutes.
 - DMG: `Usage-Meter-Pure-0.6.2-build16-arm64.dmg`, SHA-256 `6a47be595d07a62cd7d10478a2026daff4dc64e515261636408d4edeedee6908`.
